@@ -22075,6 +22075,9 @@ paths:
                           type: boolean
                         noResponse:
                           type: boolean
+                        cameraFrame:
+                          type: boolean
+                          const: true
                         assistantTextVisibility:
                           type: string
                           enum:
