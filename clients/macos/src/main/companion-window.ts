@@ -263,6 +263,7 @@ export const geometryFor = (
   avatar: CompanionSize,
   options: CompanionSize,
   dock: CompanionDock = "bottom",
+  attachedRise = 0,
 ): CompanionGeometry => {
   const avatarBox = companionBoxFor("avatar", avatar);
   const optionsBox = companionBoxFor("options", options);
@@ -314,12 +315,16 @@ export const geometryFor = (
       maxReach,
     };
   }
+  // A popover drawn on a call's bar stands on the bar's centre line and can
+  // be taller than the card the canvas keeps room for, so the card's side
+  // grows to hold it. Only that side: the near edge is the bar's, unchanged.
+  const heldRise = Math.max(riseAbove, Math.round(attachedRise));
   return {
     avatarBox,
     optionsBox,
     canvasWidth,
-    canvasHeight,
-    riseAbove,
+    canvasHeight: heldRise + dropBelow,
+    riseAbove: heldRise,
     dropBelow,
     maxReach,
   };
@@ -699,7 +704,7 @@ const currentState = (): CompanionSurfaceState => {
     // nothing was.
     dictationOffer: context.dictationOffer,
     // Passed through as it arrived, for the reason `dictationOffer` is.
-    popover: context.popover,
+    popover: currentPopover(),
     // Main's own: the call's bar and the popover's window both draw it.
     popoverView: currentPopoverView(),
     // Settled the same way, and to zero rather than to anything carried over:
@@ -1109,6 +1114,78 @@ const popoverAnchor = (): CompanionPopoverAnchor | null => {
  * the list leaves the list open on the rest. A card or a surface has no short
  * form, so it is always drawn whole.
  */
+/**
+ * How long a pressed answer keeps its prompt off the popover while the window
+ * holding it submits, in milliseconds.
+ *
+ * A press takes the approval, the credential form or the card away at once,
+ * rather than once the submission lands and the window publishes the prompt
+ * gone, which is long enough to press again. A prompt still standing when
+ * the hold runs out is one whose submission did not land, so it shows again.
+ */
+export const COMPANION_POPOVER_ANSWER_HOLD_MS = 10_000;
+
+/** Answered prompts held off the popover, by approval or popover id. */
+const answered = new Map<string, ReturnType<typeof setTimeout>>();
+
+const holdAnswered = (id: string): void => {
+  clearTimeout(answered.get(id));
+  answered.set(
+    id,
+    setTimeout(() => {
+      answered.delete(id);
+      pushState();
+    }, COMPANION_POPOVER_ANSWER_HOLD_MS),
+  );
+};
+
+/** Let go of held answers the published popover no longer carries. */
+const releaseAnswered = (popover: CompanionPopover | undefined): void => {
+  const standing = new Set<string>();
+  if (popover?.kind === "approvals") {
+    for (const item of popover.items) {
+      standing.add(item.id);
+    }
+  } else if (popover !== undefined) {
+    standing.add(popover.id);
+  }
+  for (const [id, timer] of answered) {
+    if (!standing.has(id)) {
+      clearTimeout(timer);
+      answered.delete(id);
+    }
+  }
+};
+
+/**
+ * The popover as the companion shows it: what the app's window published,
+ * less what the user has already answered. An approval list loses the rows
+ * answered and is named for the rows left, so the rest reads as a list of
+ * its own; anything else answered is nothing to show.
+ */
+export const shownPopover = (
+  popover: CompanionPopover | undefined,
+  isAnswered: (id: string) => boolean,
+): CompanionPopover | undefined => {
+  if (popover === undefined) {
+    return undefined;
+  }
+  if (popover.kind !== "approvals") {
+    return isAnswered(popover.id) ? undefined : popover;
+  }
+  const items = popover.items.filter((item) => !isAnswered(item.id));
+  if (items.length === 0) {
+    return undefined;
+  }
+  if (items.length === popover.items.length) {
+    return popover;
+  }
+  return { ...popover, id: items.map((item) => item.id).join(","), items };
+};
+
+const currentPopover = (): CompanionPopover | undefined =>
+  shownPopover(context.popover, (id) => answered.has(id));
+
 let popoverViewFor: {
   id: string;
   kind: CompanionPopover["kind"];
@@ -1116,7 +1193,7 @@ let popoverViewFor: {
 } | null = null;
 
 const currentPopoverView = (): CompanionPopoverView | undefined => {
-  const popover = context.popover;
+  const popover = currentPopover();
   if (popover === undefined) {
     return undefined;
   }
@@ -1133,21 +1210,82 @@ const currentPopoverView = (): CompanionPopoverView | undefined => {
 };
 
 /**
- * Whether a call's bar carries the popover's short form as a row of its own,
- * which is when the bar is a row (docked to the top or bottom) and the
- * popover is in its short form. The popover's window stays away then.
+ * Whether a call's bar carries the popover, joined to it as one shape, which
+ * is whenever the bar is a row (docked to the top or bottom) and the popover
+ * is not put off. The popover's own window stays away then.
  */
-const popoverRidesTheBar = (): boolean =>
-  callSurfaceFor(call, dialing) &&
-  !companionDockIsSide(dock) &&
-  currentPopoverView() === "row";
+const popoverRidesTheBar = (): boolean => {
+  const view = currentPopoverView();
+  return (
+    callSurfaceFor(call, dialing) &&
+    !companionDockIsSide(dock) &&
+    view !== undefined &&
+    view !== "deferred"
+  );
+};
+
+/**
+ * How tall the popover on the bar stands above the bar's centre line, in
+ * points, as the surface last measured it for the popover it is drawing.
+ */
+let attached: { id: string; height: number } | null = null;
+
+/**
+ * The canvas room above the avatar the popover on the bar needs: its height
+ * and the canvas's own pad, or nothing while the bar carries none.
+ */
+const attachedRise = (): number => {
+  const popover = currentPopover();
+  if (
+    attached === null ||
+    popover === undefined ||
+    attached.id !== popover.id ||
+    !popoverRidesTheBar()
+  ) {
+    return 0;
+  }
+  return (
+    attached.height + companionPadFor(geometry.avatarBox, geometry.optionsBox)
+  );
+};
+
+/** Whether the surface's window has been lent key status for a form. */
+let surfaceKeyLent = false;
+
+/**
+ * Lend the surface's window the keyboard while the credential form is on the
+ * bar, and take it back after. `setFocusable` both ways and never `blur()`:
+ * on macOS `blur` flashes a panel and drops its mouse forwarding.
+ */
+const syncSurfaceKey = (wanted: boolean): void => {
+  const win = getFloatingWindow(COMPANION_KIND);
+  if (win === null || win.isDestroyed()) {
+    surfaceKeyLent = false;
+    return;
+  }
+  if (wanted && !surfaceKeyLent) {
+    surfaceKeyLent = true;
+    win.setFocusable(true);
+    win.focus();
+  } else if (!wanted && surfaceKeyLent) {
+    surfaceKeyLent = false;
+    win.setFocusable(false);
+  }
+};
 
 const syncPopover = (): void => {
   const view = currentPopoverView();
-  syncCompanionPopover(context.popover, popoverAnchor(), {
-    show: view !== "deferred" && !popoverRidesTheBar(),
-    keyboard: context.popover?.kind === "secret" && view === "expanded",
+  const popover = currentPopover();
+  const riding = popoverRidesTheBar();
+  const form = popover?.kind === "secret" && view === "expanded";
+  syncCompanionPopover(popover, popoverAnchor(), {
+    show: view !== "deferred" && !riding,
+    keyboard: form && !riding,
   });
+  syncSurfaceKey(form && riding && popoverAnchor() !== null);
+  // The canvas holds what the bar carries, and gives the room back once it
+  // carries nothing. A rebuild pushes, and this runs again with it settled.
+  syncCanvas();
 };
 
 /**
@@ -3071,7 +3209,10 @@ export const installCompanionWindow = (): void => {
     "vellum:companion:answerPopover",
     z.tuple([companionPopoverAnswerSchema, z.string()]),
     ([answer, popoverId]) => {
-      if (!answersThePopover(context.popover, popoverId, answer)) {
+      // Against what is shown, so a second press on an answer already on
+      // its way is dropped with the prompt it was pressed on.
+      const shown = currentPopover();
+      if (!answersThePopover(shown, popoverId, answer)) {
         return;
       }
       const command: VellumCommand = {
@@ -3079,6 +3220,15 @@ export const installCompanionWindow = (): void => {
         popoverId,
         answer,
       };
+      // Off the popover at once. `open` leaves the prompt where it is: the app
+      // comes forward to answer it, and the companion steps off with it.
+      if ("itemId" in answer) {
+        holdAnswered(answer.itemId);
+        pushState();
+      } else if (answer.kind !== "open" && shown !== undefined) {
+        holdAnswered(shown.id);
+        pushState();
+      }
       if (answer.kind !== "open") {
         dispatchWithoutRaising(command);
         return;
@@ -3094,13 +3244,35 @@ export const installCompanionWindow = (): void => {
     "vellum:companion:setPopoverSize",
     z.tuple([z.string(), z.number().finite(), z.number().finite()]),
     ([popoverId, width, height]) => {
-      const popover = context.popover;
+      const popover = currentPopover();
       if (popover?.id !== popoverId) {
         return;
       }
       if (setCompanionPopoverSize(popover, { width, height })) {
         syncPopover();
       }
+    },
+  );
+
+  /**
+   * How tall the popover on the call's bar stands above the bar, from the
+   * surface's window, which is the one drawing it. The canvas is rebuilt to
+   * hold it.
+   */
+  on(
+    "vellum:companion:setAttachedPopoverHeight",
+    z.tuple([z.string(), z.number().finite().nonnegative().max(4000)]),
+    ([popoverId, height]) => {
+      const popover = currentPopover();
+      if (popover?.id !== popoverId) {
+        return;
+      }
+      const rounded = Math.ceil(height);
+      if (attached?.id === popoverId && attached.height === rounded) {
+        return;
+      }
+      attached = { id: popoverId, height: rounded };
+      syncCanvas();
     },
   );
 
@@ -3114,7 +3286,7 @@ export const installCompanionWindow = (): void => {
     "vellum:companion:setPopoverView",
     z.tuple([z.string(), z.enum(["row", "expanded", "deferred"])]),
     ([popoverId, view]) => {
-      const popover = context.popover;
+      const popover = currentPopover();
       if (popover?.id !== popoverId) {
         return;
       }
@@ -3171,8 +3343,9 @@ export const installCompanionWindow = (): void => {
     z.tuple([companionContextSchema]),
     ([next]) => {
       context = next;
+      releaseAnswered(context.popover);
       // What the user last did with a popover goes with it.
-      if (context.popover === undefined) {
+      if (currentPopover() === undefined) {
         popoverViewFor = null;
       }
       syncWatchFrame();
@@ -3615,6 +3788,7 @@ export const setCompanionSurfaceSize = (
       readCompanionSize("avatar"),
       readCompanionSize("options"),
       canvasDock(),
+      attachedRise(),
     ),
   );
 };
@@ -3634,6 +3808,7 @@ const syncCanvas = (): boolean => {
     readCompanionSize("avatar"),
     readCompanionSize("options"),
     canvasDock(),
+    attachedRise(),
   );
   if (
     next.canvasHeight === geometry.canvasHeight &&

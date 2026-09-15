@@ -16,7 +16,7 @@
  * tests as it is.
  */
 
-import { X } from "lucide-react";
+import { KeyRound, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -46,7 +46,10 @@ import { Button } from "@vellumai/design-library/components/button";
 import { Input } from "@vellumai/design-library/components/input";
 import { ScrollShadow } from "@vellumai/design-library/components/scroll-shadow";
 
-import { IntegrationIcon } from "@/components/integrations/integration-icon";
+import {
+  hasBundledIntegrationLogo,
+  IntegrationIcon,
+} from "@/components/integrations/integration-icon";
 import { useTranslation } from "@/i18n";
 import { cn } from "@/utils/misc";
 
@@ -60,7 +63,6 @@ export interface CompanionPopoverProps {
   popover: CompanionPopoverContent;
   /** How the popover is shown. A card or a surface is always drawn whole. */
   view: CompanionPopoverView;
-  assistantName: string;
   /** The card's element, for the page to measure. */
   cardRef?: Ref<HTMLDivElement>;
   /** Absent leaves the presses inert, which is what Storybook wants. */
@@ -72,6 +74,11 @@ export interface CompanionPopoverProps {
    * whole. Absent draws it neutral.
    */
   accentHex?: string;
+  /**
+   * Drawn on a call's bar, which supplies the ground, the edge and the
+   * light: the popover draws its content and nothing around it.
+   */
+  attached?: boolean;
   className?: string;
   style?: CSSProperties;
 }
@@ -85,31 +92,32 @@ export const COMPANION_POPOVER_SURFACE_CLASS =
   "border border-white/5 bg-[var(--surface-base)] text-[var(--content-default)] shadow-lg shadow-black/40";
 
 /**
- * The ground of a popover drawn whole: a dark panel with a soft rim and a
- * gradient faintly tinted in the assistant's colour.
+ * The ground of a popover drawn whole: the call bar's own dark, so the panel
+ * and the bar beneath it read as one material, with a faint wash of the
+ * assistant's colour from the top corner.
  *
- * A gradient rather than a blur of what is behind it. The popover is a window
- * of its own over another application, and a page cannot see what another
- * window draws, so the tint is what gives the panel the colour a glass one
- * would pick up.
+ * A wash rather than a blur of what is behind it. The popover is a window of
+ * its own over another application, and a page cannot see what another
+ * window draws. Kept faint: a stronger tint turns a warm accent muddy against
+ * the neutral bar.
  */
 const panelBackground = (accentHex: string | undefined): string => {
-  const tint =
+  const wash =
     accentHex === undefined
-      ? "#2a2b2e"
-      : `color-mix(in srgb, ${accentHex} 14%, #26272a)`;
-  return `linear-gradient(145deg, ${tint} 0%, #242528 55%, #1e1f21 100%)`;
+      ? "transparent"
+      : `color-mix(in srgb, ${accentHex} 7%, transparent)`;
+  return `radial-gradient(120% 80% at 0% 0%, ${wash} 0%, transparent 70%), #17181b`;
 };
 
 export function CompanionPopover({
   popover,
   view,
-  assistantName,
   cardRef,
   onAnswer,
   onView,
   onOpenLink,
   accentHex,
+  attached = false,
   className,
   style,
 }: CompanionPopoverProps) {
@@ -153,11 +161,15 @@ export function CompanionPopover({
         // A column the page bounds in height: a header and a row of answers
         // that stay put, and the content between them scrolling, so the
         // answers are always within reach however long the content runs.
-        "flex min-h-0 flex-col gap-4 rounded-[20px] border border-white/10 p-5 text-[var(--content-default)] shadow-2xl shadow-black/50",
+        "flex min-h-0 flex-col gap-3 p-4 text-[var(--content-default)]",
+        !attached &&
+          "rounded-[20px] border border-white/10 shadow-2xl shadow-black/50",
         popover.kind === "approvals" ? "w-max max-w-[640px]" : "w-[360px]",
         className,
       )}
-      style={{ background: panelBackground(accentHex), ...style }}
+      style={
+        attached ? style : { background: panelBackground(accentHex), ...style }
+      }
     >
       {popover.kind === "approvals" ? (
         <>
@@ -174,7 +186,6 @@ export function CompanionPopover({
       ) : (
         <SurfaceCard
           popover={popover}
-          assistantName={assistantName}
           onAnswer={onAnswer}
           onOpenLink={onOpenLink}
         />
@@ -212,10 +223,7 @@ export function CompanionPromptRow({
       )}
     >
       {popover.kind === "secret" ? (
-        <ServiceIcon
-          service={popover.service}
-          providerKey={popover.providerKey}
-        />
+        <ServiceIcon providerKey={popover.providerKey} />
       ) : null}
       <StepText
         className="min-w-0 flex-1 text-body-medium-default"
@@ -508,31 +516,39 @@ function ApprovalAnswers({
 }
 
 /**
- * A panel's header: a quiet title, and the close at the far end. What closing
+ * A panel's header: its title, and the close at the far end. What closing
  * means is the caller's: putting a prompt off, or dismissing a card.
  */
 function PopoverHeader({
   title,
   icon,
+  emphasis = false,
   onClose,
 }: {
   title: string;
   icon?: ReactNode;
+  /** The title is the content's own (a card's), rather than a label for it. */
+  emphasis?: boolean;
   onClose?: () => void;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="-mt-1 -mr-2 flex min-h-8 items-center gap-2">
+    <div className="-mt-0.5 -mr-1.5 flex min-h-7 items-center gap-2">
       {icon}
       <p
         dir="auto"
-        className="min-w-0 flex-1 text-body-medium-default text-[var(--content-tertiary)] select-none"
+        className={cn(
+          "min-w-0 flex-1",
+          emphasis
+            ? "text-title-small leading-snug"
+            : "text-body-small-default text-[var(--content-tertiary)] select-none",
+        )}
       >
         {title}
       </p>
       <Button
         variant="ghost"
-        className="size-8 rounded-lg px-0"
+        className="size-7 rounded-lg px-0"
         aria-label={t("companionPopover.dismiss")}
         iconOnly={<X className="size-4" strokeWidth={2} />}
         onClick={onClose}
@@ -595,10 +611,18 @@ function SecretForm({
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focused on arrival, so typing lands here once main lends the window the
-  // keyboard.
+  // Focused on arrival, and again each time the window is lent the keyboard:
+  // becoming key hands focus to whatever the window focused last, which is
+  // not the field, so a focus taken on arrival alone does not hold.
   useEffect(() => {
-    inputRef.current?.focus();
+    const focusField = (): void => {
+      inputRef.current?.focus();
+    };
+    focusField();
+    window.addEventListener("focus", focusField);
+    return () => {
+      window.removeEventListener("focus", focusField);
+    };
   }, []);
 
   return (
@@ -612,12 +636,7 @@ function SecretForm({
       }}
     >
       <PopoverHeader
-        icon={
-          <ServiceIcon
-            service={popover.service}
-            providerKey={popover.providerKey}
-          />
-        }
+        icon={<ServiceIcon providerKey={popover.providerKey} />}
         title={
           popover.service !== ""
             ? t("companionPopover.needsCredentialsFor", {
@@ -647,6 +666,9 @@ function SecretForm({
             type="password"
             fullWidth
             autoComplete="off"
+            // The surfaces around it turn selection off, and a field that
+            // inherits that will not take a caret where it is clicked.
+            className="select-text"
             maxLength={COMPANION_POPOVER_SECRET_MAX}
             label={
               popover.label !== ""
@@ -676,12 +698,10 @@ function SecretForm({
 /** A card in full, or a surface the popover can only name. */
 function SurfaceCard({
   popover,
-  assistantName,
   onAnswer,
   onOpenLink,
 }: {
   popover: Extract<CompanionPopoverContent, { kind: "card" | "surface" }>;
-  assistantName: string;
   onAnswer?: (answer: CompanionPopoverAnswer) => void;
   onOpenLink?: (url: string) => void;
 }) {
@@ -692,36 +712,38 @@ function SurfaceCard({
   const [pressed, setPressed] = useState(false);
   return (
     <>
+      {/* The card's own title heads it, beside the close. Whose card it is
+          needs no saying: the creature is right beside it. */}
       <PopoverHeader
-        title={assistantName}
+        emphasis
+        title={
+          popover.title !== ""
+            ? popover.title
+            : popover.kind === "surface"
+              ? t("companionPopover.surfaceFallback")
+              : ""
+        }
         onClose={() => onAnswer?.({ kind: "dismiss" })}
       />
       {popover.kind === "card" ? (
         <>
+          {/* Under the title and outside the scrolling content, so it stays
+              with the title it qualifies. */}
+          {popover.subtitle !== "" ? (
+            <p
+              dir="auto"
+              className="-mt-2.5 text-body-medium-lighter text-[var(--content-tertiary)]"
+            >
+              {popover.subtitle}
+            </p>
+          ) : null}
           <ScrollShadow
             className="min-h-0 flex-1"
             size={20}
             fadeEdges="end"
             hideScrollBar
           >
-            <div className="flex flex-col gap-4">
-              {popover.title !== "" || popover.subtitle !== "" ? (
-                <div className="flex flex-col gap-0.5">
-                  {popover.title !== "" ? (
-                    <p dir="auto" className="text-title-small leading-snug">
-                      {popover.title}
-                    </p>
-                  ) : null}
-                  {popover.subtitle !== "" ? (
-                    <p
-                      dir="auto"
-                      className="text-body-medium-lighter text-[var(--content-tertiary)]"
-                    >
-                      {popover.subtitle}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
+            <div className="flex flex-col gap-3">
               {popover.body !== "" ? (
                 <CardBody body={popover.body} onOpenLink={onOpenLink} />
               ) : null}
@@ -747,11 +769,6 @@ function SurfaceCard({
         </>
       ) : (
         <>
-          <p dir="auto" className="text-title-small leading-snug">
-            {popover.title !== ""
-              ? popover.title
-              : t("companionPopover.surfaceFallback")}
-          </p>
           <div className="flex items-center justify-end">
             <Button
               variant="primary"
@@ -798,7 +815,10 @@ function CardBody({
   return (
     <MarkdownMessage
       content={body}
-      className="text-body-medium-lighter text-[var(--content-secondary)]"
+      // The chat's spacing is sized for a transcript, a line's height between
+      // paragraphs. A card this size wants a third of that, and lists that
+      // sit in the text rather than out from it.
+      className="text-body-medium-lighter text-[var(--content-secondary)] [&_li]:mb-1 [&_ol]:mb-2 [&_ol]:pl-4 [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:pl-4"
       linkComponent={link}
       imageComponent={PopoverImage}
       urlTransform={popoverUrlTransform}
@@ -823,24 +843,30 @@ const PopoverImage: MarkdownImageComponent = ({ src, alt }) =>
     />
   ) : null;
 
-/** The logo of the service a credential is for, or its initials. */
-function ServiceIcon({
-  service,
-  providerKey,
-}: {
-  service: string;
-  providerKey?: string;
-}) {
-  if (service === "") {
-    return null;
+/**
+ * What stands beside a credential's words: the service's logo when one ships
+ * for it, and otherwise a key. Never the initials avatar a logo falls back
+ * to, which beside "Need credentials" reads as a person rather than a
+ * service.
+ */
+function ServiceIcon({ providerKey }: { providerKey?: string }) {
+  if (providerKey !== undefined && hasBundledIntegrationLogo(providerKey)) {
+    return (
+      <IntegrationIcon
+        providerKey={providerKey}
+        displayName={null}
+        logoUrl={null}
+        size={24}
+      />
+    );
   }
   return (
-    <IntegrationIcon
-      providerKey={providerKey ?? service}
-      displayName={service}
-      logoUrl={null}
-      size={28}
-    />
+    <span
+      aria-hidden
+      className="flex size-6 shrink-0 items-center justify-center text-[var(--content-tertiary)]"
+    >
+      <KeyRound className="size-4" strokeWidth={2} />
+    </span>
   );
 }
 

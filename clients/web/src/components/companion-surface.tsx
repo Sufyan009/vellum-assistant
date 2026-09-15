@@ -1035,6 +1035,13 @@ export function CompanionSurface({
     width: number;
     height: number;
   } | null>(null);
+  /**
+   * The width the call's line was given past its own while the bar carries a
+   * wider prompt, as last drawn. Taken back out of every measurement, so the
+   * content is measured at its own width and the bar never grows to fit a
+   * line that was only stretched to fill it.
+   */
+  const lineExtraRef = useRef(0);
 
   // The body is measured while it is still clipped, so the pill knows how wide
   // to grow before it starts growing. `scrollWidth` reports the content's own
@@ -1047,7 +1054,7 @@ export function CompanionSurface({
     }
     const measure = () => {
       setContentSize({
-        width: element.scrollWidth,
+        width: element.scrollWidth - lineExtraRef.current,
         height: element.scrollHeight,
       });
     };
@@ -1123,8 +1130,7 @@ export function CompanionSurface({
    * Whether the call's bar carries a prompt row, joined to it as one shape.
    * Only a row can: a column has no edge to stand a line of words on.
    */
-  const joined =
-    inCall && !vertical && prompt !== null && prompt !== undefined;
+  const joined = inCall && !vertical && prompt !== null && prompt !== undefined;
   const promptMeasureRef = useRef<HTMLDivElement | null>(null);
   const [promptWidth, setPromptWidth] = useState(0);
   useLayoutEffect(() => {
@@ -1133,7 +1139,10 @@ export function CompanionSurface({
       return;
     }
     const measure = () => {
-      setPromptWidth(element.scrollWidth);
+      // Its fractional width, rounded up, in the surface's own units: a
+      // whole-point width rounded down leaves the row a fraction too narrow
+      // for its words, and they wrap onto a second line they do not need.
+      setPromptWidth(Math.ceil(element.getBoundingClientRect().width / scale));
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -1141,13 +1150,22 @@ export function CompanionSurface({
     return () => {
       observer.disconnect();
     };
-  }, [joined, prompt]);
+  }, [joined, prompt, scale]);
   /**
    * The bar's width while it carries a prompt: as wide as the wider of the
    * two, so the prompt's words are never cut to fit the call's controls and
    * the two keep one edge.
    */
   const barWidth = joined ? Math.max(width, promptWidth) : width;
+  /**
+   * What the prompt widened the bar by, given to the call's line: the line
+   * says more of what the session is doing, and the controls end at the
+   * bar's far edge under the prompt's answers rather than short of it.
+   */
+  const lineExtra = barWidth - width;
+  useLayoutEffect(() => {
+    lineExtraRef.current = lineExtra;
+  }, [lineExtra]);
 
   /**
    * The line the creature stands on, as the CSS edge the surface is drawn
@@ -1285,6 +1303,8 @@ export function CompanionSurface({
           dock={dock}
           top={avatarLine}
           width={barWidth}
+          accentHex={accentHex}
+          lit={expanded}
           promptRef={promptRef}
         >
           {prompt}
@@ -1432,6 +1452,7 @@ export function CompanionSurface({
                   onClearMarks={onClearMarks}
                   shortcuts={shortcuts}
                   promptsDeferred={promptsDeferred}
+                  lineExtra={lineExtra}
                   onReviewPrompts={onReviewPrompts}
                 />
               </CaptionSideContext.Provider>
@@ -2181,12 +2202,17 @@ function PromptShelf({
   dock,
   top,
   width,
+  accentHex,
+  lit,
   promptRef,
   children,
 }: {
   dock: CompanionSurfaceDock;
   top: string;
   width: number;
+  accentHex: string;
+  /** Whether the call's light travels the shape's edge. */
+  lit: boolean;
   promptRef?: Ref<HTMLDivElement>;
   children: ReactNode;
 }) {
@@ -2213,14 +2239,30 @@ function PromptShelf({
     >
       <span
         aria-hidden
-        className={`absolute inset-0 border border-white/10 bg-[#17181b] shadow-lg shadow-black/40 ${
-          below ? "rounded-b-[22px] border-t-0" : "rounded-t-[22px] border-b-0"
+        className={`absolute inset-0 bg-[#17181b] shadow-lg shadow-black/40 ${
+          below ? "rounded-b-[22px]" : "rounded-t-[22px]"
         }`}
       />
       <span
         aria-hidden
         className="absolute right-4 left-4 h-px bg-white/10"
         style={below ? { top: 22 } : { bottom: 22 }}
+      />
+      {/* The call's light, travelling the edge of the whole shape: the shelf
+          and the half of the bar it does not run behind. The bar's own ring
+          is out while the shelf is up. */}
+      <span
+        aria-hidden
+        className="companion-working-ring pointer-events-none absolute transition-opacity duration-200"
+        style={{
+          left: -2,
+          right: -2,
+          top: below ? -24 : -2,
+          bottom: below ? -2 : -24,
+          borderRadius: 24,
+          opacity: lit ? 1 : 0,
+          ["--companion-ring-accent" as string]: accentHex,
+        }}
       />
       <div className="relative">{children}</div>
     </div>
@@ -2253,6 +2295,7 @@ function CallBody({
   shortcuts,
   promptsDeferred = 0,
   onReviewPrompts,
+  lineExtra = 0,
 }: {
   call?: VoiceActivityState;
   assistantName: string;
@@ -2284,6 +2327,8 @@ function CallBody({
   shortcuts?: CompanionCallShortcuts;
   promptsDeferred?: number;
   onReviewPrompts?: () => void;
+  /** Width past its own the line takes, to fill a bar a prompt widened. */
+  lineExtra?: number;
 }) {
   const { t } = useTranslation();
   // The dial: Talk has been pressed and no session has answered. The mutes
@@ -2296,6 +2341,7 @@ function CallBody({
       <>
         <CallLine
           vertical={vertical}
+          extra={lineExtra}
           text={
             assistantName === ""
               ? t("companionSurface.calling")
@@ -2327,7 +2373,7 @@ function CallBody({
           to decide how wide to be, and a box that collapsed under pressure
           would measure its own collapsed self: the width and the truncation
           would chase each other down. */}
-      <CallLine vertical={vertical} text={line} />
+      <CallLine vertical={vertical} extra={lineExtra} text={line} />
       {/* What was put off, beside what the session is doing: it is the
           assistant waiting on the user, which is part of what the call is
           doing. A press lists it again. */}
@@ -2450,7 +2496,15 @@ function CallBody({
  * controls' names, revealed by the pointer, and a line that stood with them
  * would read as one more of those.
  */
-function CallLine({ vertical, text }: { vertical: boolean; text: string }) {
+function CallLine({
+  vertical,
+  text,
+  extra = 0,
+}: {
+  vertical: boolean;
+  text: string;
+  extra?: number;
+}) {
   if (vertical) {
     return (
       <span
@@ -2468,7 +2522,7 @@ function CallLine({ vertical, text }: { vertical: boolean; text: string }) {
   return (
     <span
       className="ml-1 shrink-0 truncate text-[12px] text-white/85"
-      style={{ width: CALL_LINE_WIDTH }}
+      style={{ width: CALL_LINE_WIDTH + extra }}
       data-label="line"
     >
       {text}

@@ -74,7 +74,6 @@ const renderWith = (
     <CompanionPopover
       popover={popover}
       view={view}
-      assistantName="Ziggy"
       onAnswer={(answer) => {
         answers.push(answer);
       }}
@@ -160,6 +159,25 @@ describe("the popover's credential", () => {
     fireEvent.click(buttonOf(container, "Not Now")!);
 
     expect(views).toEqual(["expanded", "deferred"]);
+  });
+
+  /** Initials beside "Need credentials" read as a person, not a service. */
+  test("draws a key rather than initials for a service with no logo", () => {
+    const { container } = renderWith(SECRET);
+
+    expect(container.textContent).not.toContain("BO");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg.lucide-key-round")).not.toBeNull();
+  });
+
+  test("draws the logo of a service one ships for", () => {
+    const { container } = renderWith({
+      ...SECRET,
+      service: "GitHub",
+      providerKey: "github",
+    } as CompanionPopoverContent);
+
+    expect(container.querySelector("img")).not.toBeNull();
   });
 
   test("takes the credential in a form and sends it on Confirm", () => {
@@ -267,7 +285,9 @@ describe("stepLines", () => {
     for (let index = 1; index < lines.length; index += 1) {
       expect(lines[index - 1].length).toBeLessThanOrEqual(lines[index].length);
     }
-    expect(Math.max(...lines.map((line) => line.length))).toBeLessThanOrEqual(60);
+    expect(Math.max(...lines.map((line) => line.length))).toBeLessThanOrEqual(
+      60,
+    );
   });
 
   /** Legal but wrong: a word stranded on top above two full lines. */
