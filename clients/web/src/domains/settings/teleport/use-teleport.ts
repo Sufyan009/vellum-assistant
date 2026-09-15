@@ -15,6 +15,7 @@ import { useNavigate } from "react-router";
 import { getAssistantHealthz, hatchAssistant } from "@/assistant/api";
 import { retireAssistant } from "@/assistant/retire-service";
 import { bootstrapLocalAssistantPlatformIdentity } from "@/lib/local-platform-identity";
+import { t } from "@/i18n";
 import { getAppVersionInfo } from "@/runtime/app-info";
 import {
   assistantsList,
@@ -38,6 +39,7 @@ import {
 import { captureError } from "@/lib/sentry/capture-error";
 import { routes } from "@/utils/routes";
 
+import { ensureSourceBackup } from "./teleport-backup";
 import {
   classifyHosting,
   resolveDestination,
@@ -124,6 +126,12 @@ export function useTeleport(): TeleportController {
       createdFresh: false,
     };
     try {
+      // Snapshot the source before anything leaves it. A failure here aborts
+      // the teleport: the source is retired on Confirm & Switch, and that is
+      // only safe with a restore point behind it.
+      setStep(t("settings:teleportCard.backupStep"));
+      await ensureSourceBackup(source);
+
       if (destination === "platform") {
         await teleportToPlatform(source, setStep, setProgress, targetRef);
       } else if (destination === "local") {
