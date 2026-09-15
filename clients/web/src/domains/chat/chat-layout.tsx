@@ -100,8 +100,7 @@ import { ResearchResultsOverlay } from "@/domains/chat/onboarding-research/resea
 import { OnboardingCheckinOverlay } from "@/components/onboarding-checkin-overlay";
 import { OnboardingAvatarApplier } from "@/components/onboarding-avatar-applier";
 import { VoiceSessionPillHost } from "@/domains/chat/components/voice-session-pill-host";
-import { useDesktopSidebarStore } from "@/domains/chat/desktop/desktop-sidebar-store";
-import { AssistantDesktopSidebar } from "@/domains/chat/desktop/assistant-desktop-sidebar";
+import { AssistantDesktopPreview } from "@/domains/chat/desktop/assistant-desktop-preview";
 import { AssistantDesktopAffordance } from "@/domains/chat/desktop/assistant-desktop-affordance";
 import { useLiveVoiceSessionController } from "@/domains/chat/voice/live-voice/use-live-voice-session-controller";
 import { useSeedLiveVoiceSnapshot } from "@/domains/chat/voice/live-voice/use-seed-live-voice-snapshot";
@@ -274,7 +273,6 @@ export function ChatLayout({
   // the route, the viewer and the viewport are all in hand. One owner, so
   // consumers cannot disagree about it.
   const isMobile = useIsMobile();
-  const desktopSession = useDesktopSidebarStore.use.session();
   const viewerMainView = useViewerStore.use.mainView();
   const viewerAppMinimized = useViewerStore.use.isAppMinimized();
   const transcriptOnScreen = isTranscriptOnScreen({
@@ -1067,6 +1065,11 @@ export function ChatLayout({
       onMoveToGroup={handleMoveToGroup}
       onCreateGroupInto={handleRequestCreateGroup}
       onRemoveFromGroup={handleRemoveFromGroup}
+      leadingAction={
+        args.variant === "overlay" ? (
+          <AssistantDesktopAffordance onToggle={args.onClose} />
+        ) : undefined
+      }
       /* The same injected control the header carries, restated in the
          drawer's glyph row where the mock puts it. Sourced from the prop
          rather than imported, because it lives in another domain. */
@@ -1090,7 +1093,7 @@ export function ChatLayout({
   // mainly matters for the fade transition. Desktop is deliberately excluded:
   // its room is an inset panel mounted INSIDE `<main>`, so blurring `<main>`
   // would blur the room along with the chat behind it. Reachability is handled
-  // by `chatContent` below on both platforms, not here.
+  // by `ChatLayoutFrame` on both platforms, not here.
   const mainRoomClass =
     voiceRoomVisible && isMobile
       ? "blur-sm opacity-40 transition-[filter,opacity]"
@@ -1134,7 +1137,7 @@ export function ChatLayout({
             <>
               {topBarRightSlot}
               {topBarPill}
-              <AssistantDesktopAffordance />
+              {!isMobile && <AssistantDesktopAffordance />}
               {topBarAccessory}
             </>
           }
@@ -1160,12 +1163,6 @@ export function ChatLayout({
         isPopout={isPopout}
         mainRoomClass={mainRoomClass}
         routeContentInert={voiceRoomVisible || sleepStageVisible}
-        outletInert={
-          isMobile &&
-          desktopSession?.assistantId === assistantId &&
-          !isPopout &&
-          !documentHeaderVisible
-        }
         desktopNavigation={
           <aside
             id="chat-side-menu"
@@ -1181,9 +1178,9 @@ export function ChatLayout({
             })}
           </aside>
         }
-        desktopSidebar={
+        desktopPreview={
           !isPopout && !documentHeaderVisible ? (
-            <AssistantDesktopSidebar />
+            <AssistantDesktopPreview />
           ) : null
         }
         sleepStage={<AssistantSleepStage />}

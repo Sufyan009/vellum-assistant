@@ -94,8 +94,13 @@
     "earlierActivity": "Earlier activity"
   },
   "assistantDesktop": {
-    "resizeAria": "Resize desktop sidebar",
-    "collapseAria": "Collapse desktop sidebar",
+    "fitView": "Fit",
+    "panView": "Pan",
+    "controlView": "Control",
+    "panHint": "Drag to pan. Tap to click.",
+    "hideAria": "Hide desktop",
+    "closeAria": "Close desktop preview",
+    "moveAria": "Move desktop preview (arrow keys)",
     "expandAria": "Expand desktop",
     "busy": "The desktop is in use by another viewer.",
     "connecting": "Connecting to the desktop…",
@@ -111,7 +116,6 @@
     "installingPackages": "Installing desktop components…",
     "installingChrome": "Installing Google Chrome…",
     "checkingInstall": "Checking the installation…",
-    "installBackground": "Setup continues if you close this window.",
     "installFailed": "Installation failed. Try again to finish setup.",
     "setupRequestFailed": "Could not check desktop setup. Reconnect to try again.",
     "setupUnsupported": "Desktop installation requires a Linux x64 or ARM64 container with administrator access."
