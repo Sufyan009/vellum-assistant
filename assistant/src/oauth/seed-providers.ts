@@ -1403,6 +1403,12 @@ export const PROVIDER_SEED_DATA: Record<
       "read_discounts",
       "write_discounts",
       "read_price_rules",
+      // write_themes covers listing, duplicating, and publishing themes.
+      // Writing theme files (settings, JSON templates, Liquid) also requires
+      // Shopify's theme-code exemption on the app itself, which is granted
+      // per app in the Shopify dashboard rather than through a scope.
+      "read_themes",
+      "write_themes",
     ],
     availableScopes: [
       {
@@ -1454,6 +1460,11 @@ export const PROVIDER_SEED_DATA: Record<
       {
         scope: "write_price_rules",
         description: "Create and update price rules",
+      },
+      { scope: "read_themes", description: "Read themes and theme files" },
+      {
+        scope: "write_themes",
+        description: "Create, publish, and edit themes and theme files",
       },
       { scope: "read_files", description: "Read files uploaded to the store" },
       { scope: "write_files", description: "Upload and update files" },
