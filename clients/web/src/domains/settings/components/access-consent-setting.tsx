@@ -3,16 +3,17 @@ import { Loader2 } from "lucide-react";
 
 import { PlatformLoginNotice } from "@/components/platform-login-notice";
 import {
-  assistantsAccessConsentRetrieveOptions,
-  assistantsAccessConsentRetrieveSetQueryData,
+  assistantsAccessConsentDetailReadOptions,
+  assistantsAccessConsentDetailReadSetQueryData,
 } from "@/generated/api/@tanstack/react-query.gen";
-import { assistantsAccessConsentPartialUpdate } from "@/generated/api/sdk.gen";
+import { assistantsAccessConsentDetailPartialUpdate } from "@/generated/api/sdk.gen";
 import {
   useActiveAssistantIsPlatformHosted,
   useActiveAssistantLifecycleIsLoading,
   usePlatformGate,
 } from "@/hooks/use-platform-gate";
 import { useTranslation } from "@/i18n";
+import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
 import { toast } from "@vellumai/design-library/components/toast";
 import { Toggle } from "@vellumai/design-library/components/toggle";
 
@@ -39,24 +40,43 @@ export function AccessConsentSetting() {
   // empty state below.
   const isLifecycleLoading = useActiveAssistantLifecycleIsLoading();
   const queryClient = useQueryClient();
+  // The privacy page is not under `ActiveAssistantGate`, so read the raw
+  // store and wait for a non-null id.
+  const assistantId = useResolvedAssistantsStore.use.activeAssistantId();
+  const canQuery =
+    platformGate === "full" && isPlatformHosted && assistantId !== null;
 
   const { data, isLoading, isError } = useQuery({
-    ...assistantsAccessConsentRetrieveOptions(),
-    enabled: platformGate === "full" && isPlatformHosted,
+    ...assistantsAccessConsentDetailReadOptions({
+      path: { id: assistantId ?? "" },
+    }),
+    enabled: canQuery,
   });
 
+  // The target id travels with the mutation rather than being read from
+  // render scope in `onSuccess`: if the active assistant changes while the
+  // PATCH is in flight, the response must land in the cache of the assistant
+  // it was sent for, not whichever one is now on screen.
   const updateConsent = useMutation({
-    mutationFn: async (next: boolean) => {
-      const { data: updated } = await assistantsAccessConsentPartialUpdate({
-        body: { access_consented: next },
-        throwOnError: true,
-      });
+    mutationFn: async ({
+      assistantId: targetId,
+      next,
+    }: {
+      assistantId: string;
+      next: boolean;
+    }) => {
+      const { data: updated } =
+        await assistantsAccessConsentDetailPartialUpdate({
+          path: { id: targetId },
+          body: { access_consented: next },
+          throwOnError: true,
+        });
       return updated;
     },
-    onSuccess: (updated) => {
-      assistantsAccessConsentRetrieveSetQueryData(
+    onSuccess: (updated, variables) => {
+      assistantsAccessConsentDetailReadSetQueryData(
         queryClient,
-        undefined,
+        { path: { id: variables.assistantId } },
         updated,
       );
       toast.success(
@@ -93,6 +113,7 @@ export function AccessConsentSetting() {
   const disabled =
     platformGate !== "full" ||
     !isPlatformHosted ||
+    assistantId === null ||
     isLoading ||
     isError ||
     updateConsent.isPending;
@@ -122,7 +143,11 @@ export function AccessConsentSetting() {
               <Toggle
                 checked={checked}
                 disabled={disabled}
-                onChange={() => updateConsent.mutate(!checked)}
+                onChange={() => {
+                  if (assistantId) {
+                    updateConsent.mutate({ assistantId, next: !checked });
+                  }
+                }}
               />
             </>
           )}
