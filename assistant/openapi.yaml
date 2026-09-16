@@ -21322,6 +21322,9 @@ paths:
                                             additionalProperties: false
                                         freeTextPlaceholder:
                                           type: string
+                                        presentation:
+                                          type: string
+                                          const: virtual_desktop
                                       required:
                                         - id
                                         - question
@@ -21364,6 +21367,9 @@ paths:
                                             additionalProperties: false
                                         freeTextPlaceholder:
                                           type: string
+                                        presentation:
+                                          type: string
+                                          const: virtual_desktop
                                       required:
                                         - id
                                         - question
@@ -21833,6 +21839,9 @@ paths:
                                                     additionalProperties: false
                                                 freeTextPlaceholder:
                                                   type: string
+                                                presentation:
+                                                  type: string
+                                                  const: virtual_desktop
                                               required:
                                                 - id
                                                 - question
@@ -21875,6 +21884,9 @@ paths:
                                                     additionalProperties: false
                                                 freeTextPlaceholder:
                                                   type: string
+                                                presentation:
+                                                  type: string
+                                                  const: virtual_desktop
                                               required:
                                                 - id
                                                 - question
@@ -25728,6 +25740,9 @@ paths:
                                     additionalProperties: false
                                 freeTextPlaceholder:
                                   type: string
+                                presentation:
+                                  type: string
+                                  const: virtual_desktop
                               required:
                                 - id
                                 - question
