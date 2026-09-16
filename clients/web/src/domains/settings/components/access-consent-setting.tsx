@@ -3,6 +3,10 @@ import { Loader2 } from "lucide-react";
 
 import { PlatformLoginNotice } from "@/components/platform-login-notice";
 import {
+  formatRelativeAge,
+  useRelativeAgeTick,
+} from "@/domains/settings/pair-device/relative-age";
+import {
   assistantsAccessConsentDetailReadOptions,
   assistantsAccessConsentDetailReadSetQueryData,
 } from "@/generated/api/@tanstack/react-query.gen";
@@ -14,8 +18,12 @@ import {
 } from "@/hooks/use-platform-gate";
 import { useTranslation } from "@/i18n";
 import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
+import { Button } from "@vellumai/design-library/components/button";
 import { toast } from "@vellumai/design-library/components/toast";
 import { Toggle } from "@vellumai/design-library/components/toggle";
+
+// setTimeout caps at 2^31-1 ms; a week-long grant fits, but clamp anyway.
+const MAX_REFETCH_DELAY_MS = 2 ** 31 - 1;
 
 export function AccessConsentSetting() {
   const { t } = useTranslation("settings");
@@ -51,7 +59,23 @@ export function AccessConsentSetting() {
       path: { id: assistantId ?? "" },
     }),
     enabled: canQuery,
+    // Refetch once the grant lapses so an open tab flips to off on its own
+    // instead of showing a toggle the server no longer honors.
+    refetchInterval: (query) => {
+      const ends = query.state.data?.access_consent_expires_at;
+      if (!query.state.data?.access_consented || !ends) {
+        return false;
+      }
+      const msUntilEnd = new Date(ends).getTime() - Date.now() + 1_000;
+      return Math.min(Math.max(msUntilEnd, 1_000), MAX_REFETCH_DELAY_MS);
+    },
   });
+
+  // A grant lapses on its own (24h by default). Extending is just enabling
+  // again: the server restarts the clock from now.
+  const expiresAt =
+    data?.access_consented === true ? data.access_consent_expires_at : null;
+  useRelativeAgeTick(expiresAt !== null);
 
   // The target id travels with the mutation rather than being read from
   // render scope in `onSuccess`: if the active assistant changes while the
@@ -64,6 +88,7 @@ export function AccessConsentSetting() {
     }: {
       assistantId: string;
       next: boolean;
+      extend?: boolean;
     }) => {
       const { data: updated } =
         await assistantsAccessConsentDetailPartialUpdate({
@@ -80,9 +105,11 @@ export function AccessConsentSetting() {
         updated,
       );
       toast.success(
-        updated?.access_consented
-          ? t("accessConsentSetting.toastEnabled")
-          : t("accessConsentSetting.toastDisabled"),
+        variables.extend
+          ? t("accessConsentSetting.toastExtended")
+          : updated?.access_consented
+            ? t("accessConsentSetting.toastEnabled")
+            : t("accessConsentSetting.toastDisabled"),
       );
     },
     onError: () => {
@@ -132,6 +159,31 @@ export function AccessConsentSetting() {
             <p className="mt-1 text-body-small-lighter text-[var(--system-negative-strong)]">
               {t("accessConsentSetting.loadError")}
             </p>
+          )}
+          {expiresAt !== null && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="text-body-small-lighter text-[var(--content-tertiary)]">
+                {t("accessConsentSetting.expiresAt", {
+                  when: formatRelativeAge(expiresAt),
+                })}
+              </p>
+              <Button
+                variant="outlined"
+                size="compact"
+                disabled={disabled}
+                onClick={() => {
+                  if (assistantId) {
+                    updateConsent.mutate({
+                      assistantId,
+                      next: true,
+                      extend: true,
+                    });
+                  }
+                }}
+              >
+                {t("accessConsentSetting.extend")}
+              </Button>
+            </div>
           )}
         </div>
         <div className="flex items-center gap-2">
