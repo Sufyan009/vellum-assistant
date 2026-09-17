@@ -889,7 +889,7 @@
     "yourOwnTab": "Свои"
   },
   "integrationRow": {
-    "configure": "Настроить",
+    "configureLabel": "Настроить {name}",
     "connect": "Подключить",
     "connected": "Подключено",
     "connectedAccounts": "{count, plural, one {# подключённый аккаунт} few {# подключённых аккаунта} many {# подключённых аккаунтов} other {# подключённого аккаунта}}",
@@ -1064,6 +1064,7 @@
   "mcpServerCard": {
     "actionsSheetClose": "Закрыть",
     "configure": "Настроить",
+    "configureLabel": "Настроить {serverId}",
     "connecting": "Подключение...",
     "finishConnecting": "Завершить подключение",
     "managePlugin": "Управление плагином",
