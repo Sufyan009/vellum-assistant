@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   type BargeInGuard,
@@ -26,6 +27,7 @@ import { sanitizeForTts } from "../calls/tts-text-sanitizer.js";
 import {
   createControlMarkerHoldback,
   TASK_STOP_MARKER,
+  TASK_UPDATE_SILENT_MARKER,
 } from "../calls/voice-control-protocol.js";
 import {
   createFrontDoorLegCoordinator,
@@ -95,6 +97,7 @@ import type {
   SttStreamServerEvent,
 } from "../stt/types.js";
 import { getSubagentManager } from "../subagent/index.js";
+import type { SubagentParentNotification } from "../subagent/parent-notification.js";
 import {
   liveVoiceEndScreen,
   liveVoiceSilenceReason,
@@ -173,6 +176,7 @@ import {
   requestedSessionControl,
   sessionControlTeaching,
 } from "./session-controls.js";
+import { VoiceSubagentNotifications } from "./subagent-notifications.js";
 import { VoiceInputDiagnostics } from "./voice-input-diagnostics.js";
 
 const log = getLogger("live-voice-session");
@@ -264,6 +268,7 @@ const PROVIDER_TURN_END_FALLBACK_MARGIN_MS = 1_000;
 // a segment is at most ~180 chars of speech (~10 s of 24 kHz mono PCM
 // ≈ 480 KB), so one buffered segment is an acceptable bound.
 const TTS_MAX_OPEN_SYNTHESIS_JOBS = 2;
+const TTS_MAX_PLAYBACK_LEAD_MS = 500;
 // Audible silence required before a finished background continuation's result
 // is spoken into a live call. Long enough that the announcement lands in a real
 // lull rather than on the heels of the turn that just ended; short enough that
@@ -598,6 +603,8 @@ type UtteranceStartResult =
 // client in job-list order.
 interface TtsSegmentJob {
   readonly text: string;
+  readonly isReply: boolean;
+  audioSent: boolean;
   // Per-segment language-hint override, preferred over the turn's language.
   // Set on fixed phrases whose localized table lacks the turn's language:
   // the English fallback text carries "en" so an enforcing provider never
@@ -678,6 +685,7 @@ interface ActiveAssistantTurn {
   // A tts_audio frame actually went out to the client — latches on the first
   // forwarded chunk so the firstTtsAudio metric is marked exactly once per turn.
   ttsAudioStarted: boolean;
+  ttsFailed: boolean;
   finalized: boolean;
   // Unified front-door speculative dispatch: the leg is in flight but its
   // leading verdict (hold vs commit) has not arrived. The thinking
@@ -724,6 +732,8 @@ interface ActiveAssistantTurn {
   // no user utterance behind it — `content` is CONTINUATION_DELIVERY_CONTENT and
   // the answer rides the control prompt (buildLiveDeliveryNote).
   continuationDelivery: ContinuationDelivery | null;
+  subagentNotification: SubagentParentNotification | null;
+  notificationHandledSilently: boolean;
   // Set only on the turn that answers a look: which look it answers. The turn
   // has no user utterance behind it; the instruction rides the control prompt
   // (lookFollowUpNote).
@@ -973,6 +983,9 @@ function buildVoiceControlPrompt(
       turn.continuationDelivery.answer,
     )}`;
   }
+  if (turn.subagentNotification !== null) {
+    prompt += `\n\nThis turn is an internal background task update, not new words from the user. An earlier announcement may have been interrupted before it was heard. Use the latest conversation context to decide whether it adds something worth telling the user now. For routine progress, already-heard findings, cancelled work, or findings meant only for internal use, output only ${TASK_UPDATE_SILENT_MARKER}. Otherwise briefly speak the useful new outcome or blocker first, before optional tool calls or a visual summary. Include only what changed since the last announcement; do not just announce completion, read raw worker status, or repeat completed actions.`;
+  }
   return prompt;
 }
 
@@ -1194,6 +1207,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
   private currentUtterance: UtteranceCycle | null = null;
   private outboundFrames: Promise<void> = Promise.resolve();
   private activeAssistantTurn: ActiveAssistantTurn | null = null;
+  private readonly pendingAssistantStarts = new Set<Promise<void>>();
   private sessionEndMetricsEmitted = false;
   /**
    * Protocol error code of the failure that killed the session, latched by
@@ -1326,6 +1340,11 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
   // back to the stash, so a lost delivery costs the announcement, not the
   // answer.
   private pendingAnnouncement: ContinuationDelivery | null = null;
+  private readonly subagentNotifications = new VoiceSubagentNotifications();
+  private subagentAnnouncementTimer: ReturnType<typeof setTimeout> | null =
+    null;
+  private subagentAnnouncementsDeferred = false;
+  private subagentNotificationsClosing = false;
   private announcementTimer: ReturnType<typeof setTimeout> | null = null;
   // Host-backed work stays on the parent conversation across barge-ins. An
   // owned task belongs to the tool-capable turn doing the work; a suspended
@@ -1629,6 +1648,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       textInput: true,
       ...(this.audioInput ? {} : { audioInput: false }),
     });
+    this.scheduleSubagentAnnouncement();
   }
 
   async handleClientFrame(frame: LiveVoiceClientFrame): Promise<void> {
@@ -1998,6 +2018,9 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
 
     const shouldEmitSessionEndMetrics = this.state !== "failed";
     this.state = "closed";
+    this.subagentNotificationsClosing = true;
+    this.subagentNotifications.interruptPlayback(Date.now());
+    const turnTeardown = this.getTurnTeardown?.(this.conversationId);
     this.clearForegroundTask("session_closed");
     // Retire the island before the teardown below starts awaiting things. A
     // close can take a while (a pending continuation is delivered first), and
@@ -2025,6 +2048,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
     // turn to fold into, a continuation that finishes after this point delivers
     // into the conversation instead (see detachInterruptedTurn).
     await this.cancelAssistantTurn("session_closed");
+    await this.deliverSubagentNotificationsToConversation(turnTeardown);
     if (shouldEmitSessionEndMetrics) {
       await this.emitSessionEndMetrics();
     }
@@ -2267,6 +2291,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
   // server_vad capability; manual sessions keep single-utterance semantics
   // (no speculative post-turn transcriber).
   private scheduleRearmAfterTurn(): void {
+    this.scheduleSubagentAnnouncement();
     if (!this.turnDetector) {
       return;
     }
@@ -3009,6 +3034,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
    * camera frame that follows can be logged against the onset it answers.
    */
   private sendSpeechStarted(): void {
+    this.subagentNotifications.interruptPlayback(Date.now());
     this.lastSpeechStartedAtMs = Date.now();
     void this.sendFrame({ type: "speech_started" });
   }
@@ -3059,6 +3085,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
   }
 
   private bargeIn(turn: ActiveAssistantTurn): void {
+    this.subagentNotifications.interruptPlayback(Date.now());
     // Abort synchronously so no tts_audio frame can follow turn_cancelled,
     // and settle the cancelled turn's metrics so the next utterance's marks
     // do not collide with it in the collector. turn_cancelled flushes
@@ -3196,7 +3223,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
         // asking for it to be finished in the background — there is no pending
         // request behind an announcement turn to continue. Its answer is
         // already finished, so bargeIn returns it to the stash instead.
-        turn.continuationDelivery !== null
+        turn.continuationDelivery !== null || turn.subagentNotification !== null
         ? "announcement_turn"
         : // Nor over the answer to a look: there is no request behind it
           // either, and the user talking over it is them moving on.
@@ -3455,6 +3482,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
 
   private noteEscalatedForegroundTask(turn: ActiveAssistantTurn): void {
     if (
+      turn.subagentNotification !== null ||
       this.activeAssistantTurn?.token !== turn.token ||
       turn.discardRequested ||
       turn.abortController.signal.aborted
@@ -3479,6 +3507,9 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
     turn: ActiveAssistantTurn,
     effectiveToolName: string,
   ): void {
+    if (turn.subagentNotification !== null) {
+      return;
+    }
     const current = this.foregroundTaskState;
     if (current?.phase === "owned" && current.ownerToken === turn.token) {
       if (!current.hostToolStarted) {
@@ -3824,6 +3855,111 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
     this.clearContinuationAnnouncement();
   }
 
+  receiveSubagentNotification(
+    notification: SubagentParentNotification,
+  ): boolean {
+    if (this.isClosed && this.subagentNotificationsClosing) {
+      this.subagentNotifications.enqueue(notification);
+      return true;
+    }
+    if (this.isClosed || this.state === "failed" || !this.startVoiceTurn) {
+      return false;
+    }
+    this.subagentNotifications.acknowledgePlayback(Date.now());
+    this.subagentNotifications.enqueue(notification);
+    this.subagentAnnouncementsDeferred = false;
+    this.scheduleSubagentAnnouncement();
+    return true;
+  }
+
+  private clearSubagentAnnouncementTimer(): void {
+    if (this.subagentAnnouncementTimer !== null) {
+      clearTimeout(this.subagentAnnouncementTimer);
+      this.subagentAnnouncementTimer = null;
+    }
+  }
+
+  private scheduleSubagentAnnouncement(): void {
+    this.subagentNotifications.acknowledgePlayback(Date.now());
+    if (
+      !this.subagentNotifications.hasPending ||
+      this.subagentAnnouncementsDeferred ||
+      this.state === "initializing" ||
+      this.isClosed ||
+      this.state === "failed" ||
+      this.activeAssistantTurn !== null
+    ) {
+      this.clearSubagentAnnouncementTimer();
+      return;
+    }
+    this.subagentAnnouncementTimer = this.scheduleFloorCheck(
+      this.subagentAnnouncementTimer,
+      this.continuationAnnounceSilenceMs,
+      (blockedBy) => {
+        this.subagentAnnouncementTimer = null;
+        this.subagentNotifications.acknowledgePlayback(Date.now());
+        if (blockedBy === null) {
+          void this.announceSubagentNotification();
+        } else if (
+          blockedBy !== "turn_active" &&
+          blockedBy !== "session_unavailable"
+        ) {
+          this.scheduleSubagentAnnouncement();
+        }
+      },
+    );
+  }
+
+  private async announceSubagentNotification(): Promise<void> {
+    const notification = this.subagentNotifications.next();
+    if (notification === undefined) {
+      return;
+    }
+    let started = false;
+    try {
+      started = await this.launchAssistantTurn(
+        createSyntheticUtterance(),
+        notification.message,
+        {
+          subagentNotification: notification,
+          hiddenPrompt: true,
+          initialLeg: "escalated",
+        },
+      );
+    } catch (err) {
+      log.warn(
+        { err, taskId: notification.taskId },
+        "Voice subagent announcement failed to start",
+      );
+    }
+    if (!started) {
+      // A failed launch waits for the next user turn or update before retrying.
+      this.subagentAnnouncementsDeferred = true;
+      this.clearSubagentAnnouncementTimer();
+    }
+  }
+
+  private async deliverSubagentNotificationsToConversation(
+    turnTeardown?: Promise<void>,
+  ): Promise<void> {
+    this.clearSubagentAnnouncementTimer();
+    // Voice aborts discard the parent queue. Deliver only after its turn settles.
+    await Promise.allSettled(this.pendingAssistantStarts);
+    await turnTeardown;
+    await this.getTurnTeardown?.(this.conversationId);
+    const { injectMessageIntoParent } = await import("../subagent/notify.js");
+    const notifications = this.subagentNotifications.drain(Date.now());
+    this.subagentNotificationsClosing = false;
+    for (const notification of notifications) {
+      injectMessageIntoParent(
+        this.conversationId,
+        notification.message,
+        notification.metadata,
+        { cronRunId: notification.cronRunId, bypassLiveVoice: true },
+      );
+    }
+  }
+
   private clearContinuationAnnouncement(): void {
     this.pendingAnnouncement = null;
     if (this.announcementTimer) {
@@ -4129,6 +4265,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       return;
     }
     this.activeAssistantTurn = null;
+    this.scheduleSubagentAnnouncement();
     if (
       this.pendingAnnouncement !== null &&
       !this.isClosed &&
@@ -5557,6 +5694,9 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
   }
 
   private async interrupt(): Promise<void> {
+    this.subagentNotifications.interruptPlayback(Date.now());
+    this.subagentAnnouncementsDeferred = true;
+    this.clearSubagentAnnouncementTimer();
     if (this.isClosed || this.state === "failed") {
       return;
     }
@@ -5802,6 +5942,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       // Set on an announcement turn: the finished continuation this turn exists
       // to deliver. Its answer goes in the control prompt, not in `content`.
       continuationDelivery?: ContinuationDelivery | null;
+      subagentNotification?: SubagentParentNotification;
       // Set on the turn that answers a look: which look. Its instruction goes
       // in the control prompt, not in `content`.
       lookFollowUp?: LookSessionControl;
@@ -5821,12 +5962,15 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       foregroundTaskEpoch?: number;
     },
   ): Promise<boolean> {
+    if (opts?.hiddenPrompt !== true) {
+      this.subagentNotifications.acknowledgePlayback(Date.now());
+      this.subagentAnnouncementsDeferred = false;
+    }
     utterance.assistantTurnStarted = true;
-    // The announcement turn IS the delivery of the pending continuation, so it
-    // must not also consume the stash — feeding it both would deliver the same
-    // answer twice. Every other turn is a real user turn and takes the context.
+    // Task announcements own their updates. Pending user-turn context stays
+    // available for the next user turn instead of being consumed by an update.
     const pending =
-      opts?.continuationDelivery == null
+      opts?.continuationDelivery == null && opts?.subagentNotification == null
         ? this.consumePendingTurnContext()
         : null;
     const token = Symbol("live-voice-assistant-turn");
@@ -5895,6 +6039,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       publishedApprovalRequestId: null,
       pendingApproval: null,
       ttsAudioStarted: false,
+      ttsFailed: false,
       finalized: false,
       speculativePending: opts?.speculative === true,
       speculativeGeneration: this.vadSpeechGeneration,
@@ -5913,6 +6058,8 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       consumedAnnouncement: pending?.announcement ?? null,
       pendingContextStopGeneration: this.detachStopGeneration,
       continuationDelivery: opts?.continuationDelivery ?? null,
+      subagentNotification: opts?.subagentNotification ?? null,
+      notificationHandledSilently: false,
       lookFollowUp: opts?.lookFollowUp ?? null,
       hiddenPrompt: opts?.hiddenPrompt === true,
       foregroundTaskEpoch,
@@ -6040,7 +6187,11 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       attachments?: readonly string[];
     },
   ): Promise<boolean> {
-    if (!this.startVoiceTurn) {
+    if (
+      !this.startVoiceTurn ||
+      this.isClosed ||
+      activeTurn.abortController.signal.aborted
+    ) {
       return false;
     }
     const { token, utterance, turnId } = activeTurn;
@@ -6126,6 +6277,11 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       activeTurn.frontDoor = coordinator;
     }
 
+    let finishStart!: () => void;
+    const startup = new Promise<void>((resolve) => {
+      finishStart = resolve;
+    });
+    this.pendingAssistantStarts.add(startup);
     try {
       // Latched before the await, not after: this flag only decides whether the
       // end event carries a silence classification, and the dashboard decides
@@ -6192,6 +6348,9 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
         isInbound: true,
         launchedAtMs: activeTurn.launchedAtMs,
         signal: activeTurn.abortController.signal,
+        ...(activeTurn.subagentNotification !== null
+          ? { subagentNotification: activeTurn.subagentNotification }
+          : {}),
         // An announcement turn's content is a fixed marker, not user speech:
         // persist it hidden and suppress its echo so nothing renders as a user
         // bubble for a turn the user never started.
@@ -6296,6 +6455,9 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
             // or the escalated leg. A handed-off front-door leg returned
             // above, so its holding phrase can never end a call.
             if (msg.type === "message_complete") {
+              current.notificationHandledSilently =
+                current.subagentNotification !== null &&
+                rawText.trim() === TASK_UPDATE_SILENT_MARKER;
               const request = requestedSessionControl(
                 rawText,
                 this.sessionControls,
@@ -6530,6 +6692,9 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       await this.finalizePendingUtterance(utterance, "assistant_start_error");
       this.scheduleRearmAfterTurn();
       return false;
+    } finally {
+      this.pendingAssistantStarts.delete(startup);
+      finishStart();
     }
   }
 
@@ -6875,6 +7040,8 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
     }
     const job: TtsSegmentJob = {
       text: segment,
+      isReply: options.countsAsFirstSegment ?? true,
+      audioSent: false,
       language: options.language,
       started: false,
       settled: false,
@@ -6992,6 +7159,7 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
       await job.frames;
 
       if (failed && this.isForwardingTts(token)) {
+        currentTurn.ttsFailed = true;
         // Per-segment failure: the turn (and session) continue, so the
         // error is recoverable for the client.
         await this.sendFrame(
@@ -7004,6 +7172,12 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
           () => this.isForwardingTts(token),
         );
       }
+    } catch (err) {
+      const turn = this.activeAssistantTurn;
+      if (turn?.token === token) {
+        turn.ttsFailed = true;
+      }
+      throw err;
     } finally {
       job.settled = true;
       const settledTurn = this.activeAssistantTurn;
@@ -7028,16 +7202,25 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
     if (activeTurn?.token !== token) {
       return;
     }
-    // Only retain the assistant TTS audio when it will be archived (see
-    // collectUserAudio); the mime/sample-rate are cheap and left unconditional.
-    if (this.archiveAudio) {
-      activeTurn.assistantAudioChunks.push(
-        Buffer.from(chunk.dataBase64, "base64"),
-      );
-    }
-    activeTurn.assistantAudioMimeType = chunk.contentType;
-    activeTurn.assistantAudioSampleRate = chunk.sampleRate;
     job.frames = job.frames.then(async () => {
+      // Pace audio before entering the shared outbound queue so control frames
+      // and cancellation remain immediate while prefetched speech waits.
+      const leadMs = this.assistantPlaybackTailUntilMs - Date.now();
+      if (
+        leadMs > TTS_MAX_PLAYBACK_LEAD_MS &&
+        !activeTurn.abortController.signal.aborted
+      ) {
+        try {
+          await delay(leadMs - TTS_MAX_PLAYBACK_LEAD_MS, undefined, {
+            signal: activeTurn.abortController.signal,
+          });
+        } catch (error) {
+          if (activeTurn.abortController.signal.aborted) {
+            return;
+          }
+          throw error;
+        }
+      }
       const sent = await this.sendFrame(
         {
           type: "tts_audio",
@@ -7047,13 +7230,21 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
         },
         () => this.isForwardingTts(token),
       );
-      // Skip a frame that wasn't actually written — a backed-up outbound
+      // Skip a frame that wasn't actually written. A backed-up outbound
       // queue hasn't reached the client, so it must not extend the
       // playback-tail estimate or latch first-audio state. Token match keeps
       // a stale turn's late send from latching a newer turn.
       if (!sent) {
         return;
       }
+      if (this.archiveAudio) {
+        activeTurn.assistantAudioChunks.push(
+          Buffer.from(chunk.dataBase64, "base64"),
+        );
+      }
+      activeTurn.assistantAudioMimeType = chunk.contentType;
+      activeTurn.assistantAudioSampleRate = chunk.sampleRate;
+      job.audioSent = true;
       // Extend the client playback-tail estimate by this chunk's PCM
       // duration (chunks queue gaplessly client-side, so the tail grows
       // from whichever is later: now or the current estimate).
@@ -7346,6 +7537,23 @@ export class LiveVoiceSession implements LiveVoiceSessionContract {
     }
 
     turn.finalized = true;
+    if (turn.subagentNotification !== null) {
+      if (
+        status === "completed" &&
+        !turn.ttsFailed &&
+        (turn.notificationHandledSilently ||
+          turn.ttsJobs.some((job) => job.isReply && job.audioSent))
+      ) {
+        this.subagentNotifications.finish(
+          turn.subagentNotification,
+          turn.notificationHandledSilently
+            ? Date.now()
+            : this.assistantPlaybackTailUntilMs,
+        );
+      } else if (reason !== "barge_in") {
+        this.subagentAnnouncementsDeferred = true;
+      }
+    }
     this.clearFillerTimers(turn);
     if (
       this.foregroundTaskState?.phase === "owned" &&
