@@ -5647,6 +5647,64 @@ paths:
                 required:
                   - disconnected
                 additionalProperties: false
+  /v1/clients/history:
+    get:
+      operationId: clients_history_get
+      summary: List client connection history
+      description:
+        Return persisted client subscribe/dispose events and coalesced sessions. Reconnects shorter than 60 seconds
+        are flaps, not outages.
+      tags:
+        - clients
+      parameters:
+        - name: clientId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Restrict history to one client UUID.
+        - name: interfaceId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Restrict history to one interface (e.g. chrome-extension).
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+          description: ISO-8601 or epoch-ms lower bound. Sessions already open at this time are included.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Max coalesced sessions to return (1-500, default 50).
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      properties: {}
+                      additionalProperties: {}
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties: {}
+                      additionalProperties: {}
+                required:
+                  - sessions
+                  - events
+                additionalProperties: false
   /v1/clients/presence:
     post:
       operationId: clients_presence_post
@@ -24646,11 +24704,58 @@ paths:
                     type: boolean
                   reason:
                     type: string
+                  selectedChannels:
+                    type: array
+                    items:
+                      type: string
+                  deliveryResults:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        channel:
+                          type: string
+                        destination:
+                          type: string
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                            - sent
+                            - failed
+                            - skipped
+                        errorCode:
+                          type: string
+                        errorMessage:
+                          type: string
+                        sentAt:
+                          type: number
+                        conversationId:
+                          type: string
+                        messageId:
+                          type: string
+                        conversationStrategy:
+                          type: string
+                      required:
+                        - channel
+                        - destination
+                        - status
+                      additionalProperties: false
+                  receiptClass:
+                    type: string
+                    enum:
+                      - provider_accepted
+                      - gateway_accepted
+                      - client_os_posted
+                      - unknown
                 required:
                   - signalId
                   - dispatched
                   - deduplicated
                   - reason
+                  - selectedChannels
+                  - deliveryResults
+                  - receiptClass
                 additionalProperties: false
   /v1/notifications/events:
     post:
