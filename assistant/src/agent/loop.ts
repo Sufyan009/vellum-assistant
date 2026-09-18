@@ -1,4 +1,6 @@
 import type { AnsweredQuestion } from "../api/events/question-answered.js";
+import { resolveCallSiteConfig } from "../config/llm-resolver.js";
+import { getConfig } from "../config/loader.js";
 import type { LLMCallSite } from "../config/schemas/llm.js";
 import { SEND_USER_MESSAGE_TOOL_NAME } from "../config/send-user-message-constants.js";
 import { recordEstimate } from "../context/estimator-calibration.js";
@@ -664,6 +666,18 @@ type AgentLoopContextWindowResolver = () => {
   overflowRecovery: { enabled: boolean; safetyMarginRatio: number };
 };
 
+/** Final request surface after the pre-model hook has settled. */
+export interface PreparedModelCall {
+  callSite?: LLMCallSite;
+  overrideProfile?: string;
+  forceOverrideProfile: boolean;
+  /** Present when the finalized route opts out of prompt caching. */
+  disableCache?: true;
+  signal?: AbortSignal;
+  systemPrompt: string | null;
+  tools: ToolDefinition[];
+}
+
 interface AgentLoopRunOptionsBase {
   /** Input history the run starts from; the loop appends its output onto a copy. */
   messages: Message[];
@@ -691,7 +705,10 @@ interface AgentLoopRunOptionsBase {
   onCheckpoint?: (
     checkpoint: CheckpointInfo,
   ) => CheckpointDecision | Promise<CheckpointDecision>;
+  /** Semantic call site exposed to hooks, events, and loop behavior. */
   callSite?: LLMCallSite;
+  /** Provider-resolution call site when it differs from turn semantics. */
+  inferenceCallSite?: LLMCallSite;
   /**
    * Route this run's user-facing text through the `send_user_message` tool
    * instead of streamed assistant text. The daemon sets it for main-agent runs
@@ -741,6 +758,8 @@ interface AgentLoopRunOptionsBase {
    */
   forceOverrideProfile?: boolean;
   resolveOverrideProfile?: () => string | undefined;
+  /** Observe a finalized model request without delaying provider dispatch. */
+  onModelCallPrepared?: (prepared: PreparedModelCall) => void;
   /**
    * When `true`, the loop owns turn-start and mid-loop compaction. The pre-call
    * budget gate runs before the very first provider call — subsuming the
@@ -1430,18 +1449,21 @@ export class AgentLoop {
       requestId,
       onCheckpoint,
       callSite,
+      inferenceCallSite,
       suppressAssistantText = false,
       supportsDynamicUi = true,
       trust,
       overrideProfile,
       forceOverrideProfile = false,
       resolveOverrideProfile,
+      onModelCallPrepared,
       compactInPlace = false,
       isNonInteractive = false,
       model: runModel,
       latencyTracker,
       injectionLedgerResets,
     } = options;
+    const providerCallSite = inferenceCallSite ?? callSite;
     // Snapshot the system prompt once per run. The instance field is mutable
     // (the conversation may update it between turns), but a single run must
     // use one consistent prompt — an aborted run left detached after the
@@ -1887,7 +1909,7 @@ export class AgentLoop {
         // unexecutable client tool. The advisor consult's `advisorProfile` can
         // route `subagentSpawn` to a provider/model whose native-search support
         // differs from the construction-time default, so the gate resolves the
-        // routed target (callSite + overrideProfile) via
+        // routed target (providerCallSite + overrideProfile) via
         // `supportsNativeWebSearchFor` rather than the static
         // `this.provider.supportsNativeWebSearch` snapshot; providers without
         // the routing-aware probe fall back to the static flag. This is a SERVER
@@ -1899,7 +1921,7 @@ export class AgentLoop {
           .supportsNativeWebSearchFor
           ? this.provider.supportsNativeWebSearchFor(
               buildNativeWebSearchProbeOptions(
-                callSite,
+                providerCallSite,
                 resolveEffectiveOverrideProfile(),
                 forceOverrideProfile,
                 this.conversationId,
@@ -1918,11 +1940,11 @@ export class AgentLoop {
         //   1. Per-run explicit (`runModel`)
         //   2. Call-site resolved values (filled by
         //      `RetryProvider.normalizeSendMessageOptions` from
-        //      `resolveCallSiteConfig(callSite, llm)`)
+        //      `resolveCallSiteConfig(providerCallSite, llm)`)
         //   3. Conversation defaults (`this.config.*`, from the resolved
         //      default call-site config)
         //
-        // When `callSite` is present we deliberately leave
+        // When `providerCallSite` is present we deliberately leave
         // `max_tokens`/`thinking`/`effort`/`speed` *unset* in `providerConfig`
         // so the normalizer can fill them from the call-site resolution. The
         // normalizer only writes these fields when they're undefined; if we
@@ -1930,10 +1952,10 @@ export class AgentLoop {
         // for these knobs is silently ignored.
         //
         // `toolChoice` and `cacheTtl` are not part of the call-site schema, so
-        // they always come from `this.config` regardless of `callSite`.
+        // they always come from `this.config` regardless of `providerCallSite`.
         const providerConfig: Record<string, unknown> = {};
 
-        if (!callSite) {
+        if (!providerCallSite) {
           providerConfig.max_tokens = this.config.maxTokens;
         }
 
@@ -1941,7 +1963,7 @@ export class AgentLoop {
           providerConfig.model = runModel;
         }
 
-        if (!callSite) {
+        if (!providerCallSite) {
           const thinking = normalizeThinkingConfigForWire(this.config.thinking);
           if (thinking !== undefined) {
             providerConfig.thinking = thinking;
@@ -1980,9 +2002,9 @@ export class AgentLoop {
         // defaults when absent).
         // User-initiated conversation turns default to `mainAgent` in the
         // agent loop's caller; other invocation contexts (heartbeat, filing,
-        // analyze, etc.) pass their own `callSite`.
-        if (callSite) {
-          providerConfig.callSite = callSite;
+        // analyze, etc.) pass their own provider-resolution site.
+        if (providerCallSite) {
+          providerConfig.callSite = providerCallSite;
           providerConfig.usageTracking = "manual";
           // Per-conversation seed for deterministic `mix`-profile expansion.
           // Sourced from the loop's own conversation id so every LLM call in a
@@ -2010,7 +2032,7 @@ export class AgentLoop {
         // `activeProfile` and any call-site named profile. Threading it on
         // every send (rather than once at construction) keeps subagents that
         // share an `AgentLoop` instance but ought to inherit a different
-        // profile correct — and matches how `callSite` is plumbed.
+        // profile correct, matching how the provider call site is plumbed.
         const effectiveOverrideProfile = resolveEffectiveOverrideProfile();
         if (effectiveOverrideProfile) {
           providerConfig.overrideProfile = effectiveOverrideProfile;
@@ -2232,6 +2254,49 @@ export class AgentLoop {
             { err: preModelCallError },
             "pre-model-call hook failed — proceeding with the original request",
           );
+        }
+
+        if (onModelCallPrepared && !signal?.aborted) {
+          const preparedOverrideProfile =
+            typeof providerConfig.overrideProfile === "string" &&
+            providerConfig.overrideProfile.length > 0
+              ? providerConfig.overrideProfile
+              : undefined;
+          try {
+            const preparedForceOverrideProfile =
+              providerConfig.forceOverrideProfile === true;
+            const disableCache =
+              providerCallSite !== undefined &&
+              resolveCallSiteConfig(providerCallSite, getConfig().llm, {
+                ...(preparedOverrideProfile !== undefined
+                  ? { overrideProfile: preparedOverrideProfile }
+                  : {}),
+                ...(preparedForceOverrideProfile
+                  ? { forceOverrideProfile: true }
+                  : {}),
+                ...(this.conversationId !== undefined
+                  ? { selectionSeed: this.conversationId }
+                  : {}),
+              }).disableCache === true;
+            onModelCallPrepared({
+              ...(providerCallSite !== undefined
+                ? { callSite: providerCallSite }
+                : {}),
+              ...(preparedOverrideProfile !== undefined
+                ? { overrideProfile: preparedOverrideProfile }
+                : {}),
+              forceOverrideProfile: preparedForceOverrideProfile,
+              ...(disableCache ? { disableCache: true as const } : {}),
+              ...(signal !== undefined ? { signal } : {}),
+              systemPrompt: providerOptions.systemPrompt ?? null,
+              tools: currentTools,
+            });
+          } catch (preparedError) {
+            rlog.warn(
+              { err: preparedError },
+              "Prepared model-call observer failed; continuing with provider dispatch",
+            );
+          }
         }
 
         // Announce the LLM-call boundary so downstream handlers (the
