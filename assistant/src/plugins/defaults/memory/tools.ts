@@ -55,6 +55,17 @@ export const rememberTool = {
     const typedInput = input as unknown as RememberInput;
     // The append below writes the memory buffer, so a cancelled turn stops here.
     throwIfCancelled(context);
+    if (!resolveCapabilities(context.trustClass).canAccessMemory) {
+      // No yield even when finish_turn is set: the model has to see this, so
+      // it never tells someone a fact was saved when it was not. An error, not
+      // a quiet no-op: a non-error `remember` result reads as a durable write to
+      // `memory-run-evidence`.
+      return {
+        content:
+          "Not saved: remember writes the guardian's long-term memory, which is only available on the guardian's own turns. Retrying will not help. Tell the person only if they asked you to remember this or you said you would.",
+        isError: true,
+      };
+    }
     const result = handleRemember(
       typedInput,
       context.conversationId,
