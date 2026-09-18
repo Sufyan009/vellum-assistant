@@ -29,6 +29,7 @@ import {
   resolveTurnCommitWaitMs,
 } from "../daemon/abort-watchdog.js";
 import { CONVERSATION_BUSY_MESSAGE } from "../daemon/conversation-messaging.js";
+import type { ModeSessionSourceHandle } from "../daemon/conversation-mode-session.js";
 import { resolveChannelCapabilities } from "../daemon/conversation-runtime-assembly.js";
 import { getOrCreateConversation } from "../daemon/conversation-store.js";
 import { preactivateHostProxySkills } from "../daemon/host-proxy-preactivation.js";
@@ -351,6 +352,13 @@ export interface VoiceTurnOptions {
   subagentNotification?: SubagentParentNotification;
   /** The conversation ID for this voice call's session. */
   conversationId: string;
+  /** Camera source captured when this voice turn was accepted. */
+  modeSessionSource?: ModeSessionSourceHandle;
+  /** Camera ownership already claimed by the accepting live session. */
+  preacceptedModeSession?: {
+    requestId: string;
+    source: ModeSessionSourceHandle;
+  };
   /** Voice session ID for scoped grant matching. Defaults to callSessionId. */
   voiceSessionId?: string;
   /** The call session ID for scoped grant matching. */
@@ -1163,7 +1171,7 @@ export async function startVoiceTurn(
     detachApprovalObserver = undefined;
   };
 
-  const requestId = uuidv7();
+  const requestId = opts.preacceptedModeSession?.requestId ?? uuidv7();
   const turnId = crypto.randomUUID();
   // Ids this turn's row actually links, read back by `discardFn` so a rollback
   // does not take the attachments down with the row.
@@ -1447,6 +1455,13 @@ export async function startVoiceTurn(
     restoreTurnState(preInstallState);
     throw err;
   }
+  if (opts.modeSessionSource && !opts.preacceptedModeSession) {
+    conversation.modeSessions.claimTurn(
+      requestId,
+      opts.modeSessionSource,
+      Date.now(),
+    );
+  }
   try {
     messageId = await persistTurnUserMessage();
   } catch (err) {
@@ -1460,6 +1475,7 @@ export async function startVoiceTurn(
       // this turn still owns the state it installed. Release it to
       // defaults, matching the agent-loop finally of a turn that ran.
       cleanup();
+      conversation.modeSessions?.releaseTurn?.(requestId);
       throw err;
     }
     // A busy failure ALWAYS means a live winner holds the lock — even with
@@ -1485,6 +1501,7 @@ export async function startVoiceTurn(
       // The retry lost again (or failed outright) without this turn ever
       // running — leave the conversation exactly as the winner left it.
       restoreTurnState(preRetryState);
+      conversation.modeSessions?.releaseTurn?.(requestId);
       throw retryErr;
     }
   }
@@ -1526,12 +1543,14 @@ export async function startVoiceTurn(
   // (JARVIS-1258). Synthetic opener/verification prompts persist a row but are
   // not user speech, so their echo is suppressed.
   if (!isSyntheticVoicePrompt) {
+    const modeSession = conversation.modeSessions?.getTurnOwner?.(requestId);
     broadcastMessage({
       type: "user_message_echo",
       text: persistedContent,
       conversationId: opts.conversationId,
       messageId,
       requestId,
+      ...(modeSession ? { modeSession } : {}),
     });
     // The echoed row is already durably persisted and the agent loop hasn't
     // started, so advance the snapshot↔stream anchor to the echo's seq — else
