@@ -63,7 +63,10 @@ import {
   syncMessageToDisk,
   updateMetaFile,
 } from "../persistence/conversation-disk-view.js";
-import { SIGHT_FRAME_ATTACHMENT_IDS_KEY } from "../persistence/conversation-types.js";
+import {
+  isEchoSuppressedUserMessage,
+  SIGHT_FRAME_ATTACHMENT_IDS_KEY,
+} from "../persistence/conversation-types.js";
 import {
   attachmentIdFragment,
   type ContentBlock,
@@ -76,6 +79,7 @@ import type { ConversationModeSessionCoordinator } from "./conversation-mode-ses
 import type { MessageQueue } from "./conversation-queue-manager.js";
 import type { SlackInboundMessageMetadata } from "./handlers/shared.js";
 import type { UserMessageAttachment } from "./message-protocol.js";
+import { actorAuthorProvenance } from "./message-provenance.js";
 import type { ConversationTransportMetadata } from "./message-types/conversations.js";
 import { bestEffortModeSessionTracking } from "./mode-session-tracking.js";
 import {
@@ -965,6 +969,13 @@ export interface PersistMessageOptions {
    */
   trustContext?: TrustContext;
   /**
+   * The person whose own inbound message this row records, passed only by a
+   * caller relaying one (channel ingress and its retry replay). It names the
+   * row's author (`actorAuthorProvenance`). Machine-authored callers omit it,
+   * so their rows name no author whatever the conversation's trust is.
+   */
+  author?: TrustContext;
+  /**
    * Persist the row without indexing it (no memory segments, embeddings, or
    * lexical-index entry). For machine-authored prompts that must not enter
    * memory or search; see `ProcessMessageOptions.skipUserMessageIndexing`.
@@ -1320,6 +1331,13 @@ export async function persistQueuedMessageBody(
     const mergedMetadata = {
       ...metadataWithoutSlackInbound,
       ...provenance,
+      // A scripted row, or one the repo classes as machine-injected (hidden,
+      // ACP or subagent notification, background event), is not a person's
+      // own words, so even a relayed author is not named on one.
+      ...(resolvedScripted ||
+      isEchoSuppressedUserMessage(metadataWithoutSlackInbound)
+        ? {}
+        : actorAuthorProvenance(options.author)),
       ...(turnCtx
         ? {
             userMessageChannel: turnCtx.userMessageChannel,

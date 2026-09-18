@@ -402,6 +402,14 @@ export const messageMetadataSchema = z
     provenanceSourceChannel: channelIdSchema.optional(),
     provenanceGuardianExternalUserId: z.string().optional(),
     provenanceRequesterIdentifier: z.string().optional(),
+    /**
+     * Contact id of the person who wrote this row, from the gateway trust
+     * verdict at persist time. Stamped only on a person's own message or
+     * reaction (`actorAuthorProvenance`), never on rows the assistant writes
+     * during their turn: the other `provenance*` fields describe the turn,
+     * this one the author. Absent when the author resolved to no contact.
+     */
+    provenanceContactId: z.string().optional(),
     automated: z.boolean().optional(),
     /**
      * Transcript-suppression flag: the row is a machine signal (e.g. the
