@@ -21217,6 +21217,7 @@ paths:
                                           - firecrawl
                                           - fastcrw
                                           - searxng
+                                          - tinyfish
                                       resultCount:
                                         type: number
                                       durationMs:
@@ -21270,6 +21271,7 @@ paths:
                                           - default
                                           - firecrawl
                                           - fastcrw
+                                          - tinyfish
                                       status:
                                         type: number
                                       contentType:
@@ -21735,6 +21737,7 @@ paths:
                                                   - firecrawl
                                                   - fastcrw
                                                   - searxng
+                                                  - tinyfish
                                               resultCount:
                                                 type: number
                                               durationMs:
@@ -21788,6 +21791,7 @@ paths:
                                                   - default
                                                   - firecrawl
                                                   - fastcrw
+                                                  - tinyfish
                                               status:
                                                 type: number
                                               contentType:
