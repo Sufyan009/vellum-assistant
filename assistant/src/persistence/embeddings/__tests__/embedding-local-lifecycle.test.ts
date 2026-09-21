@@ -26,10 +26,7 @@ import { LocalEmbeddingBackend } from "../embedding-local.js";
 /** Reach past `private`, which is compile-time only, so tests drive real state. */
 type Internals = any;
 
-/**
- * A stand-in for a Bun subprocess whose stdin pipe is broken. `write` throws
- * EPIPE the way a real worker's pipe does once the child is gone.
- */
+/** A stand-in for a Bun subprocess whose stdin `write` fails synchronously. */
 function brokenPipeProc(pid = 4242) {
   return {
     pid,
@@ -232,9 +229,9 @@ describe("PID file ownership", () => {
 
 describe("broken worker pipe", () => {
   /**
-   * A write to a dead worker raises EPIPE. Escaping, it reached the daemon's
-   * `unhandledRejection` handler and terminated the process; it must instead
-   * come back as an ordinary failed embed the backend chain can fall back from.
+   * A broken pipe comes back as an ordinary failed embed the backend chain can
+   * fall back from. An escaping rejection reaches the daemon's
+   * `unhandledRejection` handler, which shuts the process down.
    */
   test("EPIPE on write resolves the request as an error", async () => {
     const backend = new LocalEmbeddingBackend("test-model") as Internals;
@@ -255,6 +252,32 @@ describe("broken worker pipe", () => {
     await expect(backend.embed(["hello"])).rejects.toThrow(
       /worker pipe write failed/,
     );
+  });
+
+  /**
+   * A real pipe, because the failure lives in Bun's behaviour rather than in
+   * ours: a batch larger than the pipe buffer, sent to a worker too busy to
+   * drain stdin, leaves the write pending, and the pending write rejects when
+   * the worker dies. A synchronous guard never sees that rejection.
+   */
+  test("a write still pending when the worker dies resolves the request as an error", async () => {
+    const backend = new LocalEmbeddingBackend("test-model") as Internals;
+    const proc = Bun.spawn({
+      cmd: [process.execPath, "-e", "setTimeout(() => {}, 60_000)"],
+      windowsHide: true,
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    spawned.push(proc);
+    backend.workerProc = proc;
+
+    const request = backend.sendRequest(["x".repeat(4 * 1024 * 1024)]);
+    proc.kill("SIGKILL");
+    const response = await request;
+
+    expect(response.error).toContain("worker pipe write failed");
+    expect(backend.pendingRequests.size).toBe(0);
   });
 
   test("a failed write does not leak the pending request", async () => {
