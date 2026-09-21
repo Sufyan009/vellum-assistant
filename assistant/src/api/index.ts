@@ -4,6 +4,7 @@ export {
   isComputerUseToolCall,
   resolveComputerUseToolName,
 } from "./computer-use-tool.js";
+export { type RememberInput, RememberInputSchema } from "./remember-tool.js";
 
 import { AcpAuthRequiredEventSchema } from "./events/acp-auth-required.js";
 import { AcpSessionCompletedEventSchema } from "./events/acp-session-completed.js";
@@ -642,6 +643,10 @@ export {
   ToolOutputChunkSubTypeSchema,
 } from "./events/tool-output-chunk.js";
 export {
+  type RecallDepth,
+  RecallDepthSchema,
+  type RecallSource,
+  RecallSourceSchema,
   type RiskScopeOption,
   RiskScopeOptionSchema,
   type ToolActivityMetadata,
