@@ -1499,6 +1499,10 @@
     "cancel": "Cancelar",
     "placeholder": "Escribe tu respuesta…"
   },
+  "rawDisclosure": {
+    "input": "Entrada sin procesar",
+    "output": "Salida sin procesar"
+  },
   "rawTab": {
     "copyRequestPayloadAriaLabel": "Copiar carga de la solicitud",
     "copyResponsePayloadAriaLabel": "Copiar carga de la respuesta",
@@ -1666,10 +1670,6 @@
     "unnamedSkill": "Habilidad",
     "usedSkill": "Habilidad usada"
   },
-  "skillLoadOutput": {
-    "output": "Salida",
-    "outputFormatAria": "Formato de salida"
-  },
   "skillToolList": {
     "fromSkill": "De {name}"
   },
@@ -1794,12 +1794,10 @@
   },
   "toolInputParameters": {
     "parameters": "Parámetros",
-    "rawInput": "Entrada sin procesar",
     "moreCount": "{count, plural, one {# más en Entrada sin procesar} other {# más en Entrada sin procesar}}"
   },
   "toolOutputSection": {
-    "moreCount": "{count, plural, one {# más en Salida sin procesar} other {# más en Salida sin procesar}}",
-    "rawOutput": "Salida sin procesar"
+    "moreCount": "{count, plural, one {# más en Salida sin procesar} other {# más en Salida sin procesar}}"
   },
   "valueFields": {
     "copyValue": "Copiar {label}"
@@ -1935,13 +1933,9 @@
     "now": "Ahora"
   },
   "webFetchDetailView": {
-    "content": "Contenido",
     "fetchFailed": "La obtención falló.",
     "fetching": "Obteniendo…",
-    "noContent": "No se extrajo contenido.",
-    "rawResult": "Resultado sin procesar",
-    "viewExtracted": "Ver extraído",
-    "viewRaw": "Ver sin procesar"
+    "noContent": "No se extrajo contenido."
   },
   "webSearchDetailView": {
     "noSources": "No se encontraron fuentes.",
