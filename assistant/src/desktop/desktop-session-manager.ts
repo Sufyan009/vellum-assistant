@@ -15,7 +15,7 @@ import { getIsContainerized } from "../config/env-registry.js";
 import { connectCdpWsTransport } from "../tools/browser/cdp-client/cdp-inspect/ws-transport.js";
 import { terminateProcessTree } from "../util/host-process.js";
 import { getLogger } from "../util/logger.js";
-import { getDataDir } from "../util/platform.js";
+import { getDataDir, getWorkspaceDir } from "../util/platform.js";
 import { sleep } from "../util/retry.js";
 import { DesktopBrowserClient } from "./desktop-browser-client.js";
 import {
@@ -645,11 +645,11 @@ export class DesktopSessionManager {
         chromiumProfileDir: this.profileDir,
         debugPort: this.debugPort,
         terminalPath: binaries.terminal,
+        fileManagerPath: binaries.fileManager,
+        workspaceDir: getWorkspaceDir(),
       });
       this.launch("panel", [binaries.panel], {
         ...env,
-        XDG_CONFIG_HOME: this.panelConfigDir,
-        XDG_DATA_HOME: this.panelConfigDir,
         GSETTINGS_BACKEND: "keyfile",
       });
     } catch (err) {
@@ -876,7 +876,8 @@ export class DesktopSessionManager {
       }
     }
     env.DISPLAY = DESKTOP_DISPLAY;
-    // D-Bus-activated window matching must see the same launchers as Plank.
+    // D-Bus services share app preferences and launchers.
+    env.XDG_CONFIG_HOME = this.panelConfigDir;
     env.XDG_DATA_HOME = this.panelConfigDir;
     env.DBUS_SESSION_BUS_ADDRESS = this.accessibilityBusAddress;
     env.NO_AT_BRIDGE = "0";

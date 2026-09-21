@@ -42,6 +42,8 @@ export interface DesktopPanelConfigRequest {
   /** Profile the launcher shares with that browser, so it reuses the window. */
   readonly chromiumProfileDir: string;
   readonly terminalPath: string;
+  readonly fileManagerPath: string;
+  readonly workspaceDir: string;
   readonly debugPort?: number;
 }
 
@@ -92,6 +94,7 @@ ${TERMINAL_HEADER_CONFIG}  font_size = 11,
   const chromiumEntry = join(applicationsDir, "google-chrome.desktop");
   // Saved dock pins reference this stable launcher path.
   const terminalEntry = join(applicationsDir, "xterm.desktop");
+  const filesEntry = join(applicationsDir, "thunar.desktop");
   const minesEntry = join(applicationsDir, "org.gnome.Mines.desktop");
   writeFileSync(
     chromiumEntry,
@@ -133,6 +136,37 @@ ${TERMINAL_HEADER_CONFIG}  font_size = 11,
     }),
   );
 
+  writeFileSync(
+    filesEntry,
+    desktopEntry({
+      name: "Files",
+      windowClass: "Thunar",
+      icon: "/usr/share/icons/Adwaita/scalable/places/folder.svg",
+      exec: desktopCommand([request.fileManagerPath, request.workspaceDir]),
+    }),
+  );
+
+  const gtkDir = join(configDir, "gtk-3.0");
+  const xfconfDir = join(configDir, "xfce4", "xfconf", "xfce-perchannel-xml");
+  mkdirSync(gtkDir, { recursive: true });
+  mkdirSync(xfconfDir, { recursive: true });
+  seedFile(
+    join(gtkDir, "settings.ini"),
+    "[Settings]\ngtk-theme-name=Adwaita\ngtk-icon-theme-name=Adwaita\ngtk-application-prefer-dark-theme=true\ngtk-font-name=Sans 11\n",
+  );
+  seedFile(
+    join(gtkDir, "bookmarks"),
+    `${pathToFileURL(request.workspaceDir).href} Workspace\n`,
+  );
+  seedFile(
+    join(xfconfDir, "thunar.xml"),
+    `<channel name="thunar" version="1.0">
+  <property name="last-window-width" type="int" value="1000"/>
+  <property name="last-window-height" type="int" value="680"/>
+  <property name="last-view" type="string" value="ThunarDetailsView"/>
+</channel>\n`,
+  );
+
   const launchersDir = join(configDir, "plank", "dock1", "launchers");
   const settingsDir = join(configDir, "glib-2.0", "settings");
   mkdirSync(launchersDir, { recursive: true });
@@ -142,13 +176,14 @@ ${TERMINAL_HEADER_CONFIG}  font_size = 11,
     return;
   }
   seedFile(join(launchersDir, "chrome.dockitem"), dockItem(chromiumEntry));
+  seedFile(join(launchersDir, "files.dockitem"), dockItem(filesEntry));
   seedFile(join(launchersDir, "terminal.dockitem"), dockItem(terminalEntry));
   seedFile(join(launchersDir, "mines.dockitem"), dockItem(minesEntry));
   seedFile(
     join(settingsDir, "keyfile"),
     [
       "[net/launchpad/plank/docks/dock1]",
-      "dock-items=['chrome.dockitem', 'terminal.dockitem', 'mines.dockitem']",
+      "dock-items=['chrome.dockitem', 'files.dockitem', 'terminal.dockitem', 'mines.dockitem']",
       "icon-size=48",
       "hide-mode='none'",
       "theme='Matte'",
@@ -164,7 +199,15 @@ function dockItem(launcher: string): string {
 
 function desktopCommand(args: string[]): string {
   return args
-    .map((arg) => `"${arg.replace(/[\\"`$]/g, "\\$&").replace(/%/g, "%%")}"`)
+    .map((arg) => {
+      const quoted = `"${arg.replace(/[\\"`$]/g, "\\$&").replace(/%/g, "%%")}"`;
+      // Desktop values are unescaped before Exec arguments are parsed.
+      return quoted
+        .replace(/\\/g, "\\\\")
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r")
+        .replace(/\t/g, "\\t");
+    })
     .join(" ");
 }
 

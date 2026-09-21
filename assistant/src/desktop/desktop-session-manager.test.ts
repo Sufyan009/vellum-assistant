@@ -230,6 +230,7 @@ describe("DesktopSessionManager process tree", () => {
         HOME: "/data",
         LANG: "C.UTF-8",
         DISPLAY: ":99",
+        XDG_CONFIG_HOME: panelConfigDir,
         XDG_DATA_HOME: panelConfigDir,
         DBUS_SESSION_BUS_ADDRESS: h.manager.accessibilityBusAddress,
         NO_AT_BRIDGE: "0",
