@@ -1688,7 +1688,8 @@
     "titleFallback": "技能"
   },
   "skillExecuteDetail": {
-    "runningSuffix": " · 正在运行"
+    "runningSuffix": " · 正在运行",
+    "unnamedTool": "技能工具"
   },
   "skillLoadCard": {
     "view": "查看"
@@ -1951,12 +1952,12 @@
     "workflowFinished": "工作流已完成"
   },
   "wakeDetailPanel": {
-    "close": "关闭",
     "details": "详细信息",
     "result": "结果",
     "runStatus": "运行状态",
     "title": "对话已唤醒",
-    "workflow": "工作流"
+    "workflow": "工作流",
+    "closeAria": "关闭详情"
   },
   "weatherForecastDisplay": {
     "celsius": "°C",

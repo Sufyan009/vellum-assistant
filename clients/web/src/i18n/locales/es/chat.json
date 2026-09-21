@@ -1650,7 +1650,8 @@
     "titleFallback": "Habilidad"
   },
   "skillExecuteDetail": {
-    "runningSuffix": " · en ejecución"
+    "runningSuffix": " · en ejecución",
+    "unnamedTool": "Herramienta de habilidad"
   },
   "skillLoadCard": {
     "view": "Ver"
@@ -1912,12 +1913,12 @@
     "workflowFinished": "Flujo de trabajo finalizado"
   },
   "wakeDetailPanel": {
-    "close": "Cerrar",
     "details": "Detalles",
     "result": "Resultado",
     "runStatus": "Estado de la ejecución",
     "title": "La conversación se activó",
-    "workflow": "Flujo de trabajo"
+    "workflow": "Flujo de trabajo",
+    "closeAria": "Cerrar detalles"
   },
   "weatherForecastDisplay": {
     "celsius": "°C",
