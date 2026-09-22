@@ -1,4 +1,7 @@
 {
+  "askQuestionDetail": {
+    "heading": "{count, plural, other {問題}}"
+  },
   "conversationDoneToast": {
     "message": "已完成",
     "undo": "復原"
