@@ -1969,8 +1969,9 @@
   },
   "webFetchDetailView": {
     "fetchFailed": "La obtención falló.",
-    "fetching": "Obteniendo…",
-    "noContent": "No se extrajo contenido."
+    "mayRequireJavaScript": "Es posible que esta página necesite JavaScript para mostrarlo todo, así que puede faltar parte del contenido.",
+    "startIndexPastEnd": "La lectura empezó después del final de esta página, así que no se leyó nada.",
+    "truncated": "Solo se leyó parte de esta página."
   },
   "webSearchDetailView": {
     "noSources": "No se encontraron fuentes.",

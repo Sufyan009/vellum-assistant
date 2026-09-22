@@ -21412,6 +21412,10 @@ paths:
                                         type: string
                                       mayRequireJavaScript:
                                         type: boolean
+                                      startIndexPastEnd:
+                                        type: boolean
+                                      providerWarning:
+                                        type: string
                                     required:
                                       - url
                                       - finalUrl
@@ -22026,6 +22030,10 @@ paths:
                                                 type: string
                                               mayRequireJavaScript:
                                                 type: boolean
+                                              startIndexPastEnd:
+                                                type: boolean
+                                              providerWarning:
+                                                type: string
                                             required:
                                               - url
                                               - finalUrl
