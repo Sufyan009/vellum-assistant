@@ -1010,6 +1010,7 @@
   },
   "detailShell": {
     "close": "关闭",
-    "closePanel": "关闭面板"
+    "closePanel": "关闭面板",
+    "loading": "加载中…"
   }
 }
