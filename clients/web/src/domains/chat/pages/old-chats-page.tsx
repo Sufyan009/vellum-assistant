@@ -13,7 +13,7 @@
  * headings travel with their rows instead of sticking.
  */
 
-import { Check, RotateCcw, Search } from "lucide-react";
+import { RotateCcw, Search } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -47,6 +47,7 @@ import {
   ConversationActionsSheet,
   renderConversationMenuItems,
 } from "@/domains/chat/components/conversation-actions-menu";
+import { conversationDoneLabels } from "@/utils/done-labels";
 import { useLongPressSheet } from "@/hooks/use-long-press-sheet";
 import {
   filterOldChats,
@@ -216,7 +217,8 @@ export function useBackfillUntilMatch({
   }, [enabled, loadedCount, onLoadMore]);
 }
 
-function OldChatsRow({
+/** Exported for its own test; the page is the only thing that renders it. */
+export function OldChatsRow({
   conversation,
   now,
 }: {
@@ -234,9 +236,11 @@ function OldChatsRow({
     timestamp === undefined
       ? ""
       : formatBucketedTime(timestamp, now, formatLocale());
-  const toggleLabel = done
-    ? t("conversationActions.reopen")
-    : t("conversationActions.markAsDone");
+  /* This page exists only with `sidebar-done` on, so its menus never say
+     "Archive": the label set is pinned to the done wording rather than read
+     off the flag, which is what keeps a story of the page honest too. */
+  const doneLabels = conversationDoneLabels(t, true);
+  const toggleLabel = done ? doneLabels.unarchive : doneLabels.archive;
 
   const longPress = useLongPressSheet({ shouldSkip: skipNestedControls });
   const menuProps = buildMenuProps(ctx, conversation);
@@ -269,7 +273,13 @@ function OldChatsRow({
         <Button
           variant="ghost"
           size="compact"
-          iconOnly={done ? <RotateCcw aria-hidden /> : <Check aria-hidden />}
+          iconOnly={
+            done ? (
+              <doneLabels.unarchiveIcon aria-hidden />
+            ) : (
+              <doneLabels.archiveIcon aria-hidden />
+            )
+          }
           aria-label={toggleLabel}
           tooltip={toggleLabel}
           onClick={toggleDone}
@@ -297,6 +307,7 @@ function OldChatsRow({
         <div {...longPress.wrapperProps}>{row}</div>
         <ConversationActionsSheet
           {...menuProps}
+          doneLabels={doneLabels}
           open={longPress.open}
           onOpenChange={longPress.onOpenChange}
         />
@@ -311,6 +322,7 @@ function OldChatsRow({
         {renderConversationMenuItems({
           Primitive: ContextMenu,
           t,
+          doneLabels,
           ...menuProps,
         })}
       </ContextMenu.Content>
