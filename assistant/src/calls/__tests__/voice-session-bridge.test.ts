@@ -2485,6 +2485,18 @@ describe("cutFrontDoorContentAtVerdict", () => {
     expect(cut?.spokenText).toBe("");
   });
 
+  test("a terminal verdict split across blocks preserves all released speech", () => {
+    const bridge = "Let me check. I will highlight the Rotate control.";
+    const cut = cutFrontDoorContentAtVerdict([
+      { type: "text", text: `${bridge} [` },
+      { type: "text", text: "ESCALATE] " },
+    ]);
+    expect(cut).toEqual({
+      blocks: [{ type: "text", text: bridge }],
+      spokenText: bridge,
+    });
+  });
+
   test("stray verdict tokens inside an answer are stripped, not treated as escalation", () => {
     const cut = cutFrontDoorContentAtVerdict([
       { type: "text", text: "It is Tuesday [0] indeed." },
@@ -2511,7 +2523,7 @@ describe("front-door hub stream gate", () => {
    * `deltas` in order, then ends the leg with `finalEvent`.
    */
   function makeStreamingConversation(
-    deltas: string[],
+    deltas: readonly string[],
     finalEvent:
       | "message_complete"
       | "generation_cancelled" = "message_complete",
@@ -2595,6 +2607,22 @@ describe("front-door hub stream gate", () => {
     expect(texts.join("")).toBe("It is Tuesday, and it is sunny.");
   });
 
+  test("a terminal escalation never broadcasts marker fragments", async () => {
+    makeStreamingConversation([
+      "I will highlight it.",
+      " [",
+      "ESC",
+      "ALATE",
+      "]",
+    ]);
+
+    const texts = await collectBroadcastText(() =>
+      startVoiceTurn({ ...makeTurnOptions(), routingLeg: "front-door" }),
+    );
+
+    expect(texts).toEqual(["I will highlight it.", " "]);
+  });
+
   test("an answer waits on the escalation judge before reaching the hub", async () => {
     let openGate!: () => void;
     judgeEscalationGate = new Promise<void>((resolve) => {
@@ -2618,9 +2646,12 @@ describe("front-door hub stream gate", () => {
     }
   });
 
-  test("an overruled answer never reaches the hub", async () => {
+  test.each([
+    { deltas: ["Yeah okay, ", "I'll do it."] },
+    { deltas: ["[ASK_GUARDIAN:"] },
+  ])("an overruled answer never reaches the hub: %j", async ({ deltas }) => {
     judgeEscalationVerdict = true;
-    makeStreamingConversation(["Yeah okay, ", "I'll do it."]);
+    makeStreamingConversation(deltas);
 
     const texts = await collectBroadcastText(async () => {
       const handle = await startVoiceTurn({
