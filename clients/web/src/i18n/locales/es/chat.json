@@ -1263,6 +1263,7 @@
     "title": "Archivos"
   },
   "messageHoverActions": {
+    "autoRouted": "Auto · {profile}",
     "bookmark": "Marcador",
     "copied": "Copiado",
     "copy": "Copiar",

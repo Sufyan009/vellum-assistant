@@ -22518,6 +22518,8 @@ paths:
                           type: boolean
                         noResponse:
                           type: boolean
+                        autoRoutedProfile:
+                          type: string
                         cameraFrame:
                           type: boolean
                           const: true
