@@ -812,6 +812,45 @@ See [Voice input diagnostics](assistant/docs/voice-input-diagnostics.md) for the
 
 With Flux turn detection enabled, microphone audio passes through for one second after locally detected speech, then room audio becomes digital silence. A bounded 200 ms buffer preserves the lead-in to resumed speech without replaying already-submitted audio. Confirmed playback echo becomes silence before buffering. Flux retains an elapsed-audio timeline through pauses. In hands-free Flux sessions, provider `StartOfTurn` owns interruption: local energy alone cannot emit `speech_started` or cancel a reply, even when provider end-of-turn handling is disabled. Other providers retain the local sustained-speech guard, and manual sessions retain client-owned interruption. Gate transitions, submission cadence, interruption source, and provider turn-end confidence, trigger, and audio position are logged for correlation with the input measurements.
 
+## macOS Companion Tour Permissions
+
+The existing companion coachmarks request Microphone for calls, Input Monitoring
+for the voice key, and Screen Recording for sharing, only when their lesson needs
+access. Microphone uses its native prompt. Input Monitoring and Screen Recording
+can detach from the coachmark into a guide beside System Settings, with a native
+file drag of the capturing Vellum Helper application. Other app permissions stay
+outside the companion tour.
+
+The informational introduction waits for an active assistant before offering the
+coachmarks. Losing assistant readiness clears an interrupted tour and its dimming
+without completing it. Talk and voice-key practice cannot start a call; microphone
+setup belongs to the final, explicit call action.
+
+Main resolves the app-owned drag path and accepts drag and Finder actions only
+from the current guide's WebContents. The guide follows the main Settings window
+by its pinned window id. Before dragging or revealing in Finder it stops following
+and yields its floating level so authentication dialogs remain accessible. The
+same coachmark resumes on an actual permission grant or Back; leaving the lesson
+cancels its guide, including pending app lookups.
+
+```mermaid
+flowchart LR
+    TOUR["Companion permission coachmark"] --> GUIDE["Native drag guide"]
+    TOUR --> SERVICE["PermissionsService"]
+    GUIDE --> SETTINGS["System Settings helper app list"]
+    HELPER["Native helper window inventory"] --> GUIDE
+    SERVICE -->|actual OS grant| STATE["Permission state broadcast"]
+    STATE --> TOUR
+    STATE -->|dismiss guide| GUIDE
+```
+
+The helper's existing window inventory provides Settings bounds without taking
+a screenshot or requesting Accessibility. The guide polls actual permission
+state, follows Settings across displays, and tears down its timers when dismissed,
+replaced, granted, or expired. Native prompt permissions retain their existing
+request path. The optional setup bridge preserves older-shell and other-platform
+behavior. See [the macOS client](clients/macos/README.md).
+
 ## Watch Sessions
 
 A watch session records what the user narrates while they work and reads their screen around it. The microphone and the socket live in the browser (`clients/web/src/domains/chat/watch/watch-controller.ts`); the cadence, the observations, and the timeline live in the daemon (`assistant/src/watch/watch-session-manager.ts`). The client draws nothing during a session: frames going the other way are lifecycle only, and the retrospective is a conversational turn after the socket is gone.
