@@ -14106,7 +14106,7 @@ paths:
     post:
       operationId: guardianactions_decision_post
       summary: Submit guardian decision
-      description: Submit a guardian action decision (approve/reject).
+      description: Submit a guardian decision on a pending request.
       tags:
         - guardian
       requestBody:
@@ -14118,9 +14118,17 @@ paths:
               properties:
                 requestId:
                   type: string
+                  minLength: 1
                   description: Guardian request ID
                 action:
                   type: string
+                  enum:
+                    - approve_once
+                    - reject
+                    - trust
+                    - verify_code
+                    - leave_unverified
+                    - block
                   description: Decision action
                 conversationId:
                   type: string
