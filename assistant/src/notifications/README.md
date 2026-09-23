@@ -39,6 +39,34 @@ guardian alone does not make a shared preview private. A declared but malformed
 completion ownership payload is excluded too. Ordinary activity notifications
 and skill-update receipts retain their existing feed behavior.
 
+`background-result-producer.ts` owns successful subagent parent continuations
+and background-tool completion wakes in user conversations. It waits for
+user-facing work and queued continuations to settle, preserves scheduled-run
+ownership, and reads the same public-result projection as scheduled delivery.
+An external-origin continuation remains eligible: its inherited channel metadata
+does not acknowledge a channel delivery. Recorded result notifications and
+successful messaging-tool deliveries suppress the completion fallback.
+When a sibling fails or is cancelled, settlement can recover an earlier unseen
+successful result from persisted conversation rows in pages of 200. Recovery stops
+at a user prompt and preserves prior delivery and quiet decisions. It uses
+insertion order, so same-millisecond messages stay in their actual turns.
+Coalesced completion messages share their final member's successful synthesis;
+`turnBatchedInto` links that result to a successful member even when the final
+sibling failed, was cancelled, or is another internal or automated trigger.
+Only a validated completed task or command owns the shared result. A failed
+synthesis remains ineligible.
+Failed-only work cannot create a completion candidate. Command wakes check
+settlement after releasing their wake queue entry, including empty or failed
+continuations; pending cancellation callbacks still count as unfinished work.
+Approval prompts do not count as prior result delivery. Internal jobs and
+workflow-manager wakes retain their existing behavior; workflow wakes need
+explicit run and quiet-mode provenance before they can use this producer.
+
+The recipient is the assistant's active Vellum guardian, as for ordinary
+replies. Completion signals retain the pipeline's permanent deduplication
+claims and existing best-effort delivery semantics. There is no new retry
+queue for a signal whose transports all fail.
+
 The local send waits for the bounded platform outcome and carries its accepted
 mobile platforms, preserving remote/local mobile deduplication. A successful
 local adapter send means the scoped intent was handed to the event hub; it is
